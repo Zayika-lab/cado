@@ -41,12 +41,10 @@ test('PCA principal direction of a chair leg is roughly vertical', async ({ page
 
 test('align leg to screen-X rotates the scene so col0(rot)=D_world', async ({ page }) => {
   await load(page);
-  // Select the first leg (index 2)
-  const items = page.locator('.partItem');
-  await items.nth(2).click();
-  const dir = await page.evaluate(() => window.__principalDirection(window.glbInfo.parts[2]));
-
-  await page.locator('.alignBtn[data-ax="0"]').click(); // → X
+  // Select the first leg body (index 2) and call alignPartTo programmatically
+  // (UI buttons were removed per user request; the function remains available).
+  const dir = await page.evaluate(() => window.__principalDirection(window.glbInfo.bodies[2]));
+  await page.evaluate(() => { window.selectedPartIdx = 2; window.__alignPartTo(0); });
   await page.waitForTimeout(350); // wait for slerp anim
 
   const col0 = await page.evaluate(() => {

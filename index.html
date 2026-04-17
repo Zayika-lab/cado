@@ -133,17 +133,16 @@ canvas{display:block;width:100%;height:100%}
 #fpPartsEmpty{padding:20px 14px;font:12px system-ui;color:#5a5a7a;
   text-align:center;font-style:italic}
 
-/* Ausrichten-Buttons unter der Teile-Liste */
-#fpAlign{padding:10px 14px;border-top:1px solid rgba(74,142,255,0.15);
-  background:rgba(74,142,255,0.05);display:none}
-#fpAlign.show{display:block}
-.fpAlignRow{display:flex;align-items:center;gap:6px;margin-bottom:4px}
-.fpAlignLb{font:10px system-ui;text-transform:uppercase;letter-spacing:1px;
-  color:#7a8194;min-width:70px}
-.alignBtn{padding:4px 10px;font:11px monospace;border:1px solid rgba(74,142,255,0.3);
-  border-radius:4px;background:transparent;color:#4a8eff;cursor:pointer;
-  transition:background 0.12s}
-.alignBtn:hover{background:rgba(74,142,255,0.15)}
+#fpAxesHead{padding:12px 14px 6px;font-size:11px;text-transform:uppercase;
+  letter-spacing:1px;color:#7a8194;font-weight:600;
+  border-top:1px solid rgba(74,142,255,0.1);margin-top:4px}
+#fpAxesList{padding:2px 0 10px}
+.axisItem{padding:6px 14px;display:flex;align-items:center;gap:8px;font:12px system-ui;color:#c8ccd4;border-bottom:1px solid rgba(255,255,255,0.03)}
+.axisItem .axLine{width:18px;height:3px;border-radius:2px;flex-shrink:0}
+.axisItem .axName{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.axisItem .axDel{background:transparent;border:none;color:#666;cursor:pointer;font-size:14px;padding:0 4px}
+.axisItem .axDel:hover{color:#ff6b6b}
+.axEmpty{padding:8px 14px;font:11px system-ui;color:#5a5a7a;font-style:italic}
 
 /* Info-Popup (Rechtsklick auf Modell → Teil/Material-Eigenschaften) */
 #glbPop{position:fixed;z-index:30;display:none;min-width:220px;max-width:320px;
@@ -206,14 +205,8 @@ canvas{display:block;width:100%;height:100%}
   <div id="fpPartsTab" class="fpTabPane">
     <div id="fpPartsHead">Teile des Modells</div>
     <div id="fpPartsList"></div>
-    <!-- Ausrichten-Aktionen (erscheinen, wenn ein Teil ausgewählt ist) -->
-    <div id="fpAlign">
-      <div class="fpAlignRow"><span class="fpAlignLb">Achse →</span>
-        <button class="alignBtn" data-ax="0">X</button>
-        <button class="alignBtn" data-ax="1">Y</button>
-        <button class="alignBtn" data-ax="2">Z</button>
-      </div>
-    </div>
+    <div id="fpAxesHead">Erstellte Achsen</div>
+    <div id="fpAxesList"></div>
   </div>
 </div>
 
@@ -656,6 +649,71 @@ var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
 var glbInfo=null; // { fileName, sizeBytes, vertCount, triCount, parts[], materials[], asset }
 var selectedPartIdx=-1; // Index des hervorgehobenen Teils (-1 = keines)
 
+// Benutzererzeugte Achsen: { name, origin:[x,y,z], direction:[x,y,z], length, color:[r,g,b], bodyIdx }
+var createdAxes=[];
+var axisVao=null, axisBuf=null;
+function rebuildAxisBuffer(){
+  if(!axisBuf){ axisBuf=gl.createBuffer(); }
+  if(!axisVao){
+    axisVao=gl.createVertexArray();
+    gl.bindVertexArray(axisVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER,axisBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+  }
+  const data=[];
+  for(const a of createdAxes){
+    // Endpunkte: origin ± direction*length/2 + kleine Marker-Kreuze
+    const hl=a.length*0.55;
+    const p0=[a.origin[0]-a.direction[0]*hl, a.origin[1]-a.direction[1]*hl, a.origin[2]-a.direction[2]*hl];
+    const p1=[a.origin[0]+a.direction[0]*hl, a.origin[1]+a.direction[1]*hl, a.origin[2]+a.direction[2]*hl];
+    data.push(...p0, ...p1);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER,axisBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
+}
+function createAxisForBody(bodyIdx){
+  if(!glbInfo||!glbInfo.bodies[bodyIdx]) return null;
+  const body=glbInfo.bodies[bodyIdx];
+  let cyl=fitCylinderAxis(body);
+  let axis, origin, length, label;
+  if(cyl && cyl.confidence>0.3){
+    axis=cyl.axis; origin=cyl.center; length=cyl.length; label='Zylinder: '+body.name;
+  } else {
+    // Fallback: PCA der Eckpunkte
+    const D=principalDirection(body);
+    // Schwerpunkt + Länge entlang D
+    const verts=new Set();
+    for(let t=0;t<body.triCount;t++){
+      const i=(body.triStart+t)*3;
+      verts.add(MI[i]); verts.add(MI[i+1]); verts.add(MI[i+2]);
+    }
+    let cx=0,cy=0,cz=0,n=0, dMin=Infinity, dMax=-Infinity;
+    for(const vi of verts){ cx+=MV[vi*3]; cy+=MV[vi*3+1]; cz+=MV[vi*3+2]; n++; }
+    cx/=n; cy/=n; cz/=n;
+    for(const vi of verts){
+      const dx=MV[vi*3]-cx, dy=MV[vi*3+1]-cy, dz=MV[vi*3+2]-cz;
+      const d=dx*D[0]+dy*D[1]+dz*D[2];
+      if(d<dMin) dMin=d; if(d>dMax) dMax=d;
+    }
+    axis=D; origin=[cx,cy,cz]; length=Math.max(dMax-dMin,0.001);
+    label='PCA: '+body.name;
+  }
+  // Farbe: gelb-orange für gut sichtbar durchs Modell
+  const a={name:label, origin, direction:axis, length:length*1.3, color:[1.0,0.75,0.15], bodyIdx};
+  createdAxes.push(a);
+  rebuildAxisBuffer();
+  renderPartsList(); // Liste aktualisieren (falls Axis-Einträge gezeigt)
+  return a;
+}
+function deleteAxis(idx){
+  if(idx>=0 && idx<createdAxes.length){
+    createdAxes.splice(idx,1);
+    rebuildAxisBuffer();
+    renderPartsList();
+  }
+}
+
 function uploadMesh(positions,normals,indices){
   MV=positions;MN=normals;MI=indices;
   const nv=MV.length/3;
@@ -984,7 +1042,6 @@ function renderPartsList(){
   const bodies = glbInfo && glbInfo.bodies ? glbInfo.bodies : [];
   if(bodies.length===0){
     list.innerHTML='<div id="fpPartsEmpty">Kein Modell geladen.</div>';
-    document.getElementById('fpAlign').classList.remove('show');
     return;
   }
   bodies.forEach((b,idx)=>{
@@ -1006,7 +1063,93 @@ function renderPartsList(){
     });
     list.appendChild(it);
   });
-  document.getElementById('fpAlign').classList.toggle('show', selectedPartIdx>=0);
+  // Achsenliste
+  const axL=document.getElementById('fpAxesList');
+  axL.innerHTML='';
+  if(createdAxes.length===0){
+    axL.innerHTML='<div class="axEmpty">Rechtsklick auf Fläche → Achse erstellen</div>';
+  } else {
+    createdAxes.forEach((a,i)=>{
+      const it=document.createElement('div'); it.className='axisItem';
+      const ln=document.createElement('div'); ln.className='axLine';
+      const [r,g,b]=a.color;
+      ln.style.background=`rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+      const nm=document.createElement('span'); nm.className='axName';
+      nm.textContent=a.name; nm.title=`dir=(${a.direction.map(x=>x.toFixed(2)).join(',')})`;
+      const del=document.createElement('button'); del.className='axDel'; del.textContent='×'; del.title='Achse löschen';
+      del.addEventListener('click',(e)=>{ e.stopPropagation(); deleteAxis(i); });
+      it.appendChild(ln); it.appendChild(nm); it.appendChild(del);
+      axL.appendChild(it);
+    });
+  }
+}
+
+// Zylinder-Erkennung + Achsen-Fit: Dreiecksnormalen sammeln, Kovarianz bilden,
+// kleinsten Eigenvektor (= Rotationsachse) via (tr*I - C)-Power-Iteration finden.
+// Rückgabe { axis, center, length, confidence } oder null bei zu wenig Daten.
+function fitCylinderAxis(obj){
+  if(!obj || obj.triCount<2) return null;
+  const normals=[];
+  for(let t=0;t<obj.triCount;t++){
+    const i=(obj.triStart+t)*3;
+    const i0=MI[i], i1=MI[i+1], i2=MI[i+2];
+    const ax=MV[i1*3]-MV[i0*3], ay=MV[i1*3+1]-MV[i0*3+1], az=MV[i1*3+2]-MV[i0*3+2];
+    const bx=MV[i2*3]-MV[i0*3], by=MV[i2*3+1]-MV[i0*3+1], bz=MV[i2*3+2]-MV[i0*3+2];
+    const nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
+    const l=Math.sqrt(nx*nx+ny*ny+nz*nz);
+    if(l>1e-9) normals.push([nx/l,ny/l,nz/l]);
+  }
+  if(normals.length<2) return null;
+  // Kovarianz der Normalen (zentriert nicht nötig — sie sind unit)
+  let Cxx=0,Cyy=0,Czz=0,Cxy=0,Cxz=0,Cyz=0;
+  for(const n of normals){
+    Cxx+=n[0]*n[0]; Cyy+=n[1]*n[1]; Czz+=n[2]*n[2];
+    Cxy+=n[0]*n[1]; Cxz+=n[0]*n[2]; Cyz+=n[1]*n[2];
+  }
+  // Q = tr(C)*I - C → größter Eigenvektor von Q = kleinster von C
+  const tr=Cxx+Cyy+Czz;
+  const Qxx=tr-Cxx, Qyy=tr-Cyy, Qzz=tr-Czz;
+  const Qxy=-Cxy, Qxz=-Cxz, Qyz=-Cyz;
+  let vx=1,vy=1,vz=0;
+  for(let k=0;k<40;k++){
+    const nx=Qxx*vx+Qxy*vy+Qxz*vz;
+    const ny=Qxy*vx+Qyy*vy+Qyz*vz;
+    const nz=Qxz*vx+Qyz*vy+Qzz*vz;
+    const l=Math.sqrt(nx*nx+ny*ny+nz*nz);
+    if(l<1e-12) return null;
+    vx=nx/l; vy=ny/l; vz=nz/l;
+  }
+  // Varianz entlang Achse: sum((n·axis)^2). Für Zylinder ≪ tr/3.
+  let varAlong=0;
+  for(const n of normals){
+    const d=n[0]*vx+n[1]*vy+n[2]*vz;
+    varAlong += d*d;
+  }
+  const avgVar=tr/3;
+  const confidence = avgVar>1e-9 ? 1 - varAlong/(normals.length*avgVar*3/normals.length) : 0;
+  // Obiger confidence-Wert: 1 = perfekter Zylinder, ~0 = Würfel o.ä.
+  // Schwerpunkt und Länge entlang Achse bestimmen
+  const verts=new Set();
+  for(let t=0;t<obj.triCount;t++){
+    const i=(obj.triStart+t)*3;
+    verts.add(MI[i]); verts.add(MI[i+1]); verts.add(MI[i+2]);
+  }
+  let cx=0,cy=0,cz=0,n=0, dMin=Infinity, dMax=-Infinity;
+  for(const vi of verts){
+    cx+=MV[vi*3]; cy+=MV[vi*3+1]; cz+=MV[vi*3+2]; n++;
+  }
+  cx/=n; cy/=n; cz/=n;
+  for(const vi of verts){
+    const dx=MV[vi*3]-cx, dy=MV[vi*3+1]-cy, dz=MV[vi*3+2]-cz;
+    const d=dx*vx+dy*vy+dz*vz;
+    if(d<dMin) dMin=d; if(d>dMax) dMax=d;
+  }
+  return {
+    axis:[vx,vy,vz],
+    center:[cx,cy,cz],
+    length: Math.max(dMax-dMin, 0.001),
+    confidence
+  };
 }
 
 // PCA-Hauptrichtung der Eckpunkte — akzeptiert Body ODER Part (gleiche Felder).
@@ -1071,9 +1214,7 @@ function alignPartTo(axisIdx){
   }
   startNavAnim(null,newQ);
 }
-document.querySelectorAll('.alignBtn').forEach(b=>{
-  b.addEventListener('click',()=>alignPartTo(+b.dataset.ax));
-});
+// alignPartTo bleibt verfügbar für künftige UI (z.B. Rechtsklick-Menü)
 window.__alignPartTo=alignPartTo;
 window.__principalDirection=principalDirection;
 window.setCustomCutFromFace=setCustomCutFromFace;
@@ -1135,15 +1276,31 @@ function showGlbPopup(mx,my){
   rows.push(`<div class="row"><span class="k">Teile</span><span class="v">${glbInfo.parts.length}</span></div>`);
   rows.push(`<div class="row"><span class="k">Materialien</span><span class="v">${glbInfo.materials.length}</span></div>`);
   if(glbInfo.asset.generator) rows.push(`<div class="row"><span class="k">Generator</span><span class="v" title="${glbInfo.asset.generator}">${glbInfo.asset.generator}</span></div>`);
-  // Aktion: getroffene Fläche als Schnittebene verwenden
+  // Aktionen: Schnittebene / Achse erstellen
   if(hit && !hit.isCap){
     rows.push('<button class="action" id="glbpUseCut">Diese Fläche als Schnittebene</button>');
+    if(part){
+      // partFromTri → zugehöriger Body über partIndices suchen
+      const bIdx = glbInfo.bodies.findIndex(b => b.partIndices.includes(glbInfo.parts.indexOf(part)));
+      if(bIdx>=0){
+        rows.push('<button class="action" id="glbpMakeAxis">Achse erstellen (Zylinder / PCA)</button>');
+        pop.dataset.bodyIdx=String(bIdx);
+      }
+    }
   }
   pop.innerHTML=rows.join('');
-  const btn=document.getElementById('glbpUseCut');
-  if(btn){
-    btn.addEventListener('click',()=>{
+  const btnCut=document.getElementById('glbpUseCut');
+  if(btnCut){
+    btnCut.addEventListener('click',()=>{
       setCustomCutFromFace(hit.normal, hit.point);
+      hideGlbPopup();
+    });
+  }
+  const btnAxis=document.getElementById('glbpMakeAxis');
+  if(btnAxis){
+    btnAxis.addEventListener('click',()=>{
+      const bi=parseInt(pop.dataset.bodyIdx,10);
+      createAxisForBody(bi);
       hideGlbPopup();
     });
   }
@@ -1639,6 +1796,21 @@ function render(){
   gl.uniform3fv(gl.getUniformLocation(pMain,'uC'),[0.33,0.6,0.93]);
   gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
   gl.disable(gl.CULL_FACE);
+
+  // Pass 2.3: Benutzererzeugte Achsen als Linien durch die Szene (immer sichtbar)
+  if(createdAxes.length>0 && axisVao){
+    gl.useProgram(pLine);
+    gl.bindVertexArray(axisVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
+    gl.depthFunc(gl.ALWAYS);
+    gl.lineWidth(2);
+    for(let i=0;i<createdAxes.length;i++){
+      const a=createdAxes[i];
+      gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[a.color[0],a.color[1],a.color[2],1]);
+      gl.drawArrays(gl.LINES, i*2, 2);
+    }
+    gl.depthFunc(gl.LEQUAL);
+  }
 
   // Pass 2.5: Hervorhebung des ausgewählten Körpers (alle seine Primitive)
   if(selectedPartIdx>=0 && glbInfo && glbInfo.bodies[selectedPartIdx]){
