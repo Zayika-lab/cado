@@ -11,7 +11,8 @@ canvas{display:block;width:100%;height:100%}
   color:#4a8eff;font-size:13px;line-height:1.7;cursor:pointer;background:rgba(74,142,255,0.04)}
 #drop:hover{background:rgba(74,142,255,0.1)}
 #drop.hide{display:none!important}
-#info{position:fixed;top:10px;left:120px;color:#4a8eff;font:12px monospace;z-index:10}
+#info{position:fixed;top:10px;left:120px;color:#4a8eff;font:12px monospace;z-index:10;
+  transition:left 0.22s ease}
 #ctrl{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:10;
   background:rgba(20,22,28,0.92);border:1px solid rgba(74,142,255,0.2);border-radius:10px;
   padding:12px 20px;display:none;flex-direction:column;gap:8px;min-width:360px;
@@ -52,7 +53,13 @@ canvas{display:block;width:100%;height:100%}
 
 /* HUD-Kompass (Koordinatensystem) unten links */
 #hud{position:fixed;bottom:10px;left:10px;z-index:15;pointer-events:none;
-  width:130px;height:130px}
+  width:130px;height:130px;transition:left 0.22s ease}
+
+/* Inhalte nach rechts verschieben, wenn das Dateipanel geöffnet ist */
+#filesPanel.open ~ #info{left:380px}
+#filesPanel.open ~ #hud{left:270px}
+#filesPanel.open ~ #drop{transform:translate(calc(-50% + 130px),-50%)}
+#drop{transition:transform 0.22s ease}
 
 /* Datei-Seitenleiste links */
 #filesPanel{position:fixed;top:0;left:0;bottom:0;width:260px;z-index:18;
