@@ -106,6 +106,33 @@ canvas{display:block;width:100%;height:100%}
 #loadBtn{transition:left 0.22s ease}
 #filesPanel.open ~ #loadBtn{left:270px!important}
 
+/* Tabs innerhalb der Datei-Seitenleiste */
+#fpTabs{display:flex;border-bottom:1px solid rgba(74,142,255,0.15);flex-shrink:0}
+.fpTab{flex:1;background:transparent;border:none;color:#5a5a7a;padding:10px 8px;
+  font:11px system-ui;text-transform:uppercase;letter-spacing:1px;cursor:pointer;
+  border-bottom:2px solid transparent;transition:color 0.12s,border-color 0.12s}
+.fpTab:hover{color:#9aa3b7}
+.fpTab.active{color:#4a8eff;border-bottom-color:#4a8eff}
+.fpTabPane{display:none;flex:1;overflow:hidden;flex-direction:column}
+.fpTabPane.active{display:flex}
+
+/* Teile-Liste */
+#fpPartsHead{padding:12px 14px 8px;font-size:11px;text-transform:uppercase;
+  letter-spacing:1px;color:#7a8194;font-weight:600;flex-shrink:0;
+  border-bottom:1px solid rgba(74,142,255,0.1)}
+#fpPartsList{flex:1;overflow-y:auto;padding:4px 0}
+.partItem{padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.12s}
+.partItem:hover{background:rgba(74,142,255,0.08)}
+.partItem.active{background:rgba(74,142,255,0.15);border-left:2px solid #4a8eff;padding-left:12px}
+.partSw{width:12px;height:12px;border-radius:3px;flex-shrink:0;
+  border:1px solid rgba(255,255,255,0.15)}
+.partName{flex:1;font-size:12px;color:#c8ccd4;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.partTris{font:10px monospace;color:#7a8194;flex-shrink:0}
+#fpPartsEmpty{padding:20px 14px;font:12px system-ui;color:#5a5a7a;
+  text-align:center;font-style:italic}
+
 /* Info-Popup (Rechtsklick auf Modell → Teil/Material-Eigenschaften) */
 #glbPop{position:fixed;z-index:30;display:none;min-width:220px;max-width:320px;
   background:rgba(20,22,28,0.96);border:1px solid rgba(74,142,255,0.35);
@@ -142,15 +169,27 @@ canvas{display:block;width:100%;height:100%}
 <!-- Datei-Seitenleiste (nach Anmeldung sichtbar) -->
 <button id="fpToggle">☰ Dateien</button>
 <div id="filesPanel">
-  <div id="fpHead">
-    <div id="fpTitle">Meine Dateien</div>
-    <div id="fpQuotaTxt"><span>Speicher</span><span id="fpQuotaVal">0 / 100 MB</span></div>
-    <div id="fpQuotaBar"><div id="fpQuotaFill"></div></div>
+  <div id="fpTabs">
+    <button class="fpTab active" data-tab="files">Dateien</button>
+    <button class="fpTab" data-tab="parts">Teile</button>
   </div>
-  <div id="fpList"></div>
-  <div id="fpUpload">
-    <button id="fpUploadBtn">+ GLB hochladen</button>
-    <input type="file" id="fpUploadIn" accept=".glb" style="display:none">
+  <!-- Tab: Dateien -->
+  <div id="fpFilesTab" class="fpTabPane active">
+    <div id="fpHead">
+      <div id="fpTitle">Meine Dateien</div>
+      <div id="fpQuotaTxt"><span>Speicher</span><span id="fpQuotaVal">0 / 100 MB</span></div>
+      <div id="fpQuotaBar"><div id="fpQuotaFill"></div></div>
+    </div>
+    <div id="fpList"></div>
+    <div id="fpUpload">
+      <button id="fpUploadBtn">+ GLB hochladen</button>
+      <input type="file" id="fpUploadIn" accept=".glb" style="display:none">
+    </div>
+  </div>
+  <!-- Tab: Teile (sichtbar, sobald ein Modell geladen ist) -->
+  <div id="fpPartsTab" class="fpTabPane">
+    <div id="fpPartsHead">Teile des Modells</div>
+    <div id="fpPartsList"></div>
   </div>
 </div>
 
@@ -591,6 +630,7 @@ precision highp float;uniform vec4 uSC;out vec4 f;void main(){f=uSC;}`);
 /* ═══ Mesh-Zustand ═══ */
 var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
 var glbInfo=null; // { fileName, sizeBytes, vertCount, triCount, parts[], materials[], asset }
+var selectedPartIdx=-1; // Index des hervorgehobenen Teils (-1 = keines)
 
 function uploadMesh(positions,normals,indices){
   MV=positions;MN=normals;MI=indices;
@@ -844,6 +884,45 @@ function intersectTri(o,d,v0,v1,v2){
   if(t<0) return null;
   return {t,u,v,point:[o[0]+d[0]*t,o[1]+d[1]*t,o[2]+d[2]*t],e1,e2};
 }
+// Tab-Umschaltung + Teile-Liste
+function switchTab(tabName){
+  document.querySelectorAll('.fpTab').forEach(t=>{
+    t.classList.toggle('active', t.dataset.tab===tabName);
+  });
+  document.getElementById('fpFilesTab').classList.toggle('active', tabName==='files');
+  document.getElementById('fpPartsTab').classList.toggle('active', tabName==='parts');
+}
+document.querySelectorAll('.fpTab').forEach(t=>{
+  t.addEventListener('click', ()=>switchTab(t.dataset.tab));
+});
+
+function renderPartsList(){
+  const list=document.getElementById('fpPartsList');
+  list.innerHTML='';
+  if(!glbInfo || !glbInfo.parts || glbInfo.parts.length===0){
+    list.innerHTML='<div id="fpPartsEmpty">Kein Modell geladen.</div>';
+    return;
+  }
+  glbInfo.parts.forEach((p,idx)=>{
+    const it=document.createElement('div');
+    it.className='partItem'+(idx===selectedPartIdx?' active':'');
+    const sw=document.createElement('div'); sw.className='partSw';
+    const mat=p.materialIdx>=0 ? glbInfo.materials[p.materialIdx] : null;
+    sw.style.background = mat ? colorToHex(mat.baseColor) : '#555';
+    sw.title = mat ? mat.name : 'kein Material';
+    const nm=document.createElement('span'); nm.className='partName';
+    nm.textContent=p.name; nm.title=p.name;
+    const tc=document.createElement('span'); tc.className='partTris';
+    tc.textContent=p.triCount+' △';
+    it.appendChild(sw); it.appendChild(nm); it.appendChild(tc);
+    it.addEventListener('click', ()=>{
+      selectedPartIdx = (selectedPartIdx===idx) ? -1 : idx;
+      renderPartsList();
+    });
+    list.appendChild(it);
+  });
+}
+
 // Welches Part enthält ein bestimmtes Dreieck? Lineare Suche, i.d.R. wenige Teile.
 function partFromTri(triIdx){
   if(!glbInfo||!glbInfo.parts) return null;
@@ -1245,9 +1324,11 @@ async function loadFile(file){
     const m=parseGLB(buf);
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
-    // GLB-Metadaten für Rechtsklick-Info-Popup speichern
+    // GLB-Metadaten für Rechtsklick-Info-Popup + Teile-Panel speichern
     glbInfo={fileName:file.name, sizeBytes:file.size, vertCount:nv, triCount:nt,
              parts:m.parts, materials:m.materials, asset:m.assetInfo};
+    selectedPartIdx=-1;
+    renderPartsList();
     info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
     // Datei + Metadaten in Firebase Storage/Firestore speichern
     if(window.__saveGLB){
@@ -1268,6 +1349,8 @@ window.__loadGLBBuffer=function(name,buf){
     const nv=m.positions.length/3, nt=m.indices.length/3;
     glbInfo={fileName:name, sizeBytes:buf.byteLength||0, vertCount:nv, triCount:nt,
              parts:m.parts, materials:m.materials, asset:m.assetInfo};
+    selectedPartIdx=-1;
+    renderPartsList();
     info.textContent=name+': '+nv+' verts, '+nt+' tris (wiederhergestellt)';
   }catch(e){
     info.textContent='Wiederherstellung fehlgeschlagen: '+e.message;
@@ -1319,6 +1402,22 @@ function render(){
   gl.uniform3fv(gl.getUniformLocation(pMain,'uC'),[0.33,0.6,0.93]);
   gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
   gl.disable(gl.CULL_FACE);
+
+  // Pass 2.5: Hervorhebung des ausgewählten Teils (orange Überblendung, sichtbar
+  // auch durch davor liegende Geometrie dank deaktivierter Tiefenprüfung).
+  if(selectedPartIdx>=0 && glbInfo && glbInfo.parts[selectedPartIdx]){
+    const p=glbInfo.parts[selectedPartIdx];
+    if(p.triCount>0){
+      gl.useProgram(pSphere);
+      gl.bindVertexArray(meshVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
+      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[1.0,0.55,0.1,0.55]);
+      gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+      gl.drawElements(gl.TRIANGLES, p.triCount*3, gl.UNSIGNED_INT, p.triStart*3*4);
+      gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+    }
+  }
 
   // Pass 3: Cap (Schnittfläche) – stencil!=0, Tiefentest an, Tiefe nicht schreiben
   gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
