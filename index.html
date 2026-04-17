@@ -181,6 +181,10 @@ body.axisMode canvas{cursor:crosshair}
 .planeItem .plName{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .planeItem .plDel{background:transparent;border:none;color:#666;cursor:pointer;font-size:14px;padding:0 4px}
 .planeItem .plDel:hover{color:#ff6b6b}
+.planeItem .plCut{background:rgba(74,142,255,0.1);border:1px solid rgba(74,142,255,0.3);
+  border-radius:4px;color:#4a8eff;padding:2px 6px;font:10px system-ui;cursor:pointer;
+  flex-shrink:0}
+.planeItem .plCut:hover{background:rgba(74,142,255,0.25)}
 .axisItem.planePick{cursor:pointer;background:rgba(74,142,255,0.05)}
 .axisItem.planePick:hover{background:rgba(74,142,255,0.2)}
 .axBadge{display:inline-block;width:18px;height:18px;border-radius:4px;
@@ -532,9 +536,15 @@ body.axisMode canvas{cursor:crosshair}
   }
 
   // Hilfsfunktionen für Persistenz von Achsen und Ebenen pro Datei
+  let __saveTimer = null;
+  window.__scheduleSave = () => {
+    if (__saveTimer) clearTimeout(__saveTimer);
+    __saveTimer = setTimeout(() => { __saveTimer = null; window.__saveSceneObjects(); }, 250);
+  };
   window.__saveSceneObjects = async () => {
-    if (!activeDocId) { console.log('[save] no activeDocId'); return; }
+    if (!activeDocId) return;
     try {
+      const cut = window.__getCutState ? window.__getCutState() : null;
       const payload = {
         axes: (window.createdAxes || []).map(a => ({
           name: a.name, origin: a.origin, direction: a.direction,
@@ -543,22 +553,18 @@ body.axisMode canvas{cursor:crosshair}
         planes: (window.createdPlanes || []).map(p => ({
           name: p.name, origin: p.origin, normal: p.normal,
           u: p.u, v: p.v, size: p.size, color: p.color
-        }))
+        })),
+        cut: cut || null
       };
       await updateDoc(doc(db, 'glb_loads', activeDocId), payload);
-      console.log('[save] ok — axes:', payload.axes.length, 'planes:', payload.planes.length);
     } catch (e) { console.warn('[save] FAILED:', e.code || e.message); }
   };
   window.__loadSceneObjects = (f) => {
-    // Lokale Arrays aus Firestore-Dokument-Feldern befüllen und Buffer neu bauen
-    if (window.createdAxes) { window.createdAxes.length = 0; }
-    if (window.createdPlanes) { window.createdPlanes.length = 0; }
-    if (f.axes && Array.isArray(f.axes)) {
-      for (const a of f.axes) window.createdAxes.push({ ...a });
-    }
-    if (f.planes && Array.isArray(f.planes)) {
-      for (const p of f.planes) window.createdPlanes.push({ ...p });
-    }
+    if (window.createdAxes) window.createdAxes.length = 0;
+    if (window.createdPlanes) window.createdPlanes.length = 0;
+    if (Array.isArray(f.axes)) for (const a of f.axes) window.createdAxes.push({ ...a });
+    if (Array.isArray(f.planes)) for (const p of f.planes) window.createdPlanes.push({ ...p });
+    if (f.cut && window.__setCutState) window.__setCutState(f.cut);
     if (window.rebuildAxisBuffer) window.rebuildAxisBuffer();
     if (window.rebuildPlaneBuffer) window.rebuildPlaneBuffer();
     if (window.renderPartsList) window.renderPartsList();
@@ -882,6 +888,13 @@ function deletePlane(idx){
     if(window.__saveSceneObjects) window.__saveSceneObjects();
   }
 }
+
+// Eine erstellte Ebene als Schnittebene verwenden:
+// Normale = plane.normal, Basispunkt = plane.origin → customPlane wie bei Face-Pick
+function useCreatedPlaneAsCut(idx){
+  const p=createdPlanes[idx]; if(!p) return;
+  setCustomCutFromFace(p.normal, p.origin);
+}
 function rebuildAxisBuffer(){
   if(!axisBuf){ axisBuf=gl.createBuffer(); }
   if(!axisVao){
@@ -1169,6 +1182,7 @@ function setCustomCutFromFace(N, P0){
   if(chk){ chk.checked=true; }
   document.getElementById('ctrl').classList.remove('cutOff');
   lastCustom=null;
+  if(window.__saveSceneObjects) window.__saveSceneObjects();
 }
 function clearCustomCut(){ customPlane=null; lastCustom=null; }
 
@@ -1350,9 +1364,12 @@ function renderPartsList(){
       sw.style.background=`rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},0.5)`;
       const nm=document.createElement('span'); nm.className='plName';
       nm.textContent=p.name; nm.title=`normal=(${p.normal.map(x=>x.toFixed(2)).join(',')})`;
+      const cut=document.createElement('button'); cut.className='plCut'; cut.textContent='⇒ Schnitt';
+      cut.title='Diese Ebene als Schnittebene verwenden';
+      cut.addEventListener('click',(e)=>{ e.stopPropagation(); useCreatedPlaneAsCut(i); });
       const del=document.createElement('button'); del.className='plDel'; del.textContent='×'; del.title='Ebene löschen';
       del.addEventListener('click',(e)=>{ e.stopPropagation(); deletePlane(i); });
-      it.appendChild(sw); it.appendChild(nm); it.appendChild(del);
+      it.appendChild(sw); it.appendChild(nm); it.appendChild(cut); it.appendChild(del);
       plL.appendChild(it);
     });
   }
@@ -1752,11 +1769,42 @@ window.createdAxes=createdAxes;
 window.rebuildAxisBuffer=rebuildAxisBuffer;
 window.rebuildPlaneBuffer=rebuildPlaneBuffer;
 window.renderPartsList=renderPartsList;
+// Lese-Accessoren für Cut-Zustand (vom Persistenz-Code verwendet)
+window.__getCutState=()=>({
+  enabled: cutEnabled, axis: clipAxis, t: clipT,
+  custom: customPlane ? {
+    normal: [...customPlane.normal], dMin: customPlane.dMin,
+    dMax: customPlane.dMax, t: customPlane.t
+  } : null
+});
+// Schreib-Accessor mit UI-Sync nach Laden
+window.__setCutState=(s)=>{
+  if(!s) return;
+  cutEnabled = !!s.enabled;
+  if(typeof s.axis==='number') clipAxis = s.axis;
+  if(typeof s.t==='number') clipT = s.t;
+  customPlane = s.custom ? {
+    normal: [...s.custom.normal], dMin: s.custom.dMin,
+    dMax: s.custom.dMax, t: s.custom.t
+  } : null;
+  const chk=document.getElementById('cutEnable'); if(chk) chk.checked=cutEnabled;
+  document.getElementById('ctrl').classList.toggle('cutOff', !cutEnabled);
+  document.querySelectorAll('.ab').forEach(b=>{
+    b.classList.toggle('on', !customPlane && +b.dataset.a===clipAxis);
+  });
+  const slider=document.getElementById('cutR');
+  if(slider){
+    slider.value=String(customPlane ? customPlane.t : clipT);
+    document.getElementById('cutV').textContent=Math.round(+slider.value*100)+'%';
+  }
+  lastCustom=null;
+};
 window.toggleAxisMode=toggleAxisMode;
 window.floodSmoothRegion=floodSmoothRegion;
 window.createPlaneFromAxes=createPlaneFromAxes;
 window.createPlaneFromAxisAndCoord=createPlaneFromAxisAndCoord;
 window.deletePlane=deletePlane;
+window.useCreatedPlaneAsCut=useCreatedPlaneAsCut;
 window.createdPlanes=createdPlanes;
 window.togglePlaneMode=togglePlaneMode;
 window.planeSelectAxis=planeSelectAxis;
@@ -2021,24 +2069,26 @@ document.getElementById('cutR').oninput=e=>{
   if(customPlane){ customPlane.t=t; } else { clipT=t; }
   document.getElementById('cutV').textContent=Math.round(t*100)+'%';
   lastCustom=null;
+  if(window.__scheduleSave) window.__scheduleSave();
 };
-// Schnitt-Aktivierungs-Schalter
 document.getElementById('cutEnable').addEventListener('change',e=>{
   cutEnabled=e.target.checked;
   document.getElementById('ctrl').classList.toggle('cutOff', !cutEnabled);
-  if(cutEnabled) lastCustom=null; // Kontur beim Einschalten neu berechnen
+  if(cutEnabled) lastCustom=null;
+  if(window.__saveSceneObjects) window.__saveSceneObjects();
 });
-// Initialzustand: Schnitt aus
 document.getElementById('ctrl').classList.add('cutOff');
+// Public helpers used by the auth module to sync state after load
+window.__markContourDirty = ()=>{ lastCustom=null; };
 document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));
   b.classList.add('on');
   clipAxis=+b.dataset.a;
   clearCustomCut();
-  // Slider auf aktuellen clipT zurücksetzen
   document.getElementById('cutR').value=String(clipT);
   document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';
   lastCustom=null;
+  if(window.__saveSceneObjects) window.__saveSceneObjects();
 });
 document.getElementById('sphR').oninput=e=>{
   _sphereScale=+e.target.value;
