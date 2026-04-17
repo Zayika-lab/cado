@@ -158,6 +158,10 @@ canvas{display:block;width:100%;height:100%}
 #glbPop .sw{display:inline-block;width:12px;height:12px;border-radius:3px;
   border:1px solid rgba(255,255,255,0.2);vertical-align:middle;margin-right:4px}
 #glbPop hr{border:none;border-top:1px solid rgba(74,142,255,0.15);margin:8px 0}
+#glbPop button.action{margin-top:6px;padding:5px 10px;font:11px system-ui;
+  background:rgba(74,142,255,0.15);border:1px solid rgba(74,142,255,0.4);
+  border-radius:5px;color:#4a8eff;cursor:pointer;width:100%}
+#glbPop button.action:hover{background:rgba(74,142,255,0.28)}
 </style></head><body>
 
 <!-- Anmeldebildschirm (zuerst sichtbar) -->
@@ -790,22 +794,53 @@ function qn(q){const l=Math.sqrt(q[0]**2+q[1]**2+q[2]**2+q[3]**2);return q.map(x
 arcQ=qn([Math.sin(0.25),0.12,0.05,Math.cos(0.25)]);
 
 var oSize=1,target=[0,0,0],clipT=0.5,clipAxis=2;
-function clipVal(){return bMin[clipAxis]+clipT*(bMax[clipAxis]-bMin[clipAxis]);}
-function capMat(){const v=clipVal(),e=-maxDim*0.0003;
-  if(clipAxis===0)return mul(trans(v+e,0,0),rotY(Math.PI/2));
-  if(clipAxis===1)return mul(trans(0,v+e,0),rotX(-Math.PI/2));
-  return trans(0,0,v+e);}
+// Benutzerdefinierte Schnittebene (null = axis-aligned mit clipAxis/clipT)
+// Struktur: { normal:[nx,ny,nz], dMin:number, dMax:number, t:number in [0,1] }
+var customPlane=null;
 
-/* Schnittkontur neu berechnen, wenn sich Achse oder Position ändert */
+// Generische Ebenengleichung: N·p = d
+function cutNormal(){
+  if(customPlane) return customPlane.normal;
+  const n=[0,0,0]; n[clipAxis]=1; return n;
+}
+function cutD(){
+  if(customPlane) return customPlane.dMin + customPlane.t*(customPlane.dMax-customPlane.dMin);
+  return bMin[clipAxis]+clipT*(bMax[clipAxis]-bMin[clipAxis]);
+}
+// Legacy-Alias — pickModel nutzt noch clipVal()/clipAxis für den Cap-Test;
+// bei axis-aligned ist das identisch, bei custom fällt pickModel auf den
+// generischen Test zurück (siehe pickModel).
+function clipVal(){ return cutD(); }
+
+function capMat(){
+  const N=cutNormal(), d=cutD(), eps=-maxDim*0.0003;
+  // Rotation von (0,0,1) auf N (Halbwinkel-Quaternion)
+  const qv=[-N[1], N[0], 0];
+  const qw=1+N[2];
+  const l2=qv[0]*qv[0]+qv[1]*qv[1]+qw*qw;
+  let R;
+  if(l2<1e-12){
+    // N ≈ (0,0,-1): 180°-Drehung um X-Achse
+    R=rotX(Math.PI);
+  } else {
+    const l=Math.sqrt(l2);
+    R=q2m([qv[0]/l, qv[1]/l, 0, qw/l]);
+  }
+  const T=trans(N[0]*(d+eps), N[1]*(d+eps), N[2]*(d+eps));
+  return mul(T,R);
+}
+
+/* Schnittkontur neu berechnen, wenn sich Ebene ändert */
 function computeContour(){
   if(!meshLoaded)return;
-  const val=clipVal(),ax=clipAxis,segs=[];
+  const N=cutNormal(), d=cutD(), segs=[];
+  function dist(vi){ return N[0]*MV[vi*3]+N[1]*MV[vi*3+1]+N[2]*MV[vi*3+2]-d; }
   for(let t=0;t<MI.length/3;t++){
     const i0=MI[t*3],i1=MI[t*3+1],i2=MI[t*3+2];
-    const d0=MV[i0*3+ax]-val,d1=MV[i1*3+ax]-val,d2=MV[i2*3+ax]-val;
+    const d0=dist(i0), d1=dist(i1), d2=dist(i2);
     const pts=[];
-    function eh(ia,ib,da,db){if((da>0)!==(db>0)){const t=da/(da-db);
-      pts.push(MV[ia*3]+(MV[ib*3]-MV[ia*3])*t,MV[ia*3+1]+(MV[ib*3+1]-MV[ia*3+1])*t,MV[ia*3+2]+(MV[ib*3+2]-MV[ia*3+2])*t);}}
+    function eh(ia,ib,da,db){if((da>0)!==(db>0)){const tt=da/(da-db);
+      pts.push(MV[ia*3]+(MV[ib*3]-MV[ia*3])*tt,MV[ia*3+1]+(MV[ib*3+1]-MV[ia*3+1])*tt,MV[ia*3+2]+(MV[ib*3+2]-MV[ia*3+2])*tt);}}
     eh(i0,i1,d0,d1);eh(i1,i2,d1,d2);eh(i2,i0,d2,d0);
     if(pts.length>=6)segs.push(...pts.slice(0,6));
   }
@@ -813,7 +848,33 @@ function computeContour(){
   cCount=segs.length/3;
 }
 var lastCA=-1,lastCT=-1;
-function updateCut(){if(clipAxis!==lastCA||clipT!==lastCT){lastCA=clipAxis;lastCT=clipT;computeContour();}}
+var lastCustom=null;
+function updateCut(){
+  const cur=customPlane?('c'+customPlane.t):'a'+clipAxis+':'+clipT;
+  if(cur!==lastCustom){lastCustom=cur;lastCA=clipAxis;lastCT=clipT;computeContour();}
+}
+
+// Setzt custom-Schnittebene aus einer getroffenen Fläche (Nicht-Cap) mit Normale N
+// und Basispunkt P0. Schiebereglerposition wird so gewählt, dass aktueller Hit = Ebene.
+function setCustomCutFromFace(N, P0){
+  // dMin/dMax = Projektion des Modells auf N
+  let dMin=Infinity, dMax=-Infinity;
+  const nv=MV.length/3;
+  for(let i=0;i<nv;i++){
+    const v=N[0]*MV[i*3]+N[1]*MV[i*3+1]+N[2]*MV[i*3+2];
+    if(v<dMin) dMin=v; if(v>dMax) dMax=v;
+  }
+  const dAt=N[0]*P0[0]+N[1]*P0[1]+N[2]*P0[2];
+  const tInit = dMax>dMin ? (dAt-dMin)/(dMax-dMin) : 0.5;
+  customPlane={normal:[N[0],N[1],N[2]], dMin, dMax, t:Math.max(0,Math.min(1,tInit))};
+  // Schieberegler synchronisieren, Button-"on"-Zustände löschen
+  const slider=document.getElementById('cutR');
+  slider.value=String(customPlane.t);
+  document.getElementById('cutV').textContent=Math.round(customPlane.t*100)+'%';
+  document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));
+  lastCustom=null; // trigger recompute
+}
+function clearCustomCut(){ customPlane=null; lastCustom=null; }
 
 /* ═══ Maus-Eingabe (mittlere Taste = Rotation, linke Taste = Pan, Rad = Zoom) ═══ */
 function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
@@ -919,22 +980,25 @@ document.querySelectorAll('.fpTab').forEach(t=>{
 function renderPartsList(){
   const list=document.getElementById('fpPartsList');
   list.innerHTML='';
-  if(!glbInfo || !glbInfo.parts || glbInfo.parts.length===0){
+  // Bodies = semantische "ein Körper pro GLB-Node"; jeder Primitive gehört einem Body
+  const bodies = glbInfo && glbInfo.bodies ? glbInfo.bodies : [];
+  if(bodies.length===0){
     list.innerHTML='<div id="fpPartsEmpty">Kein Modell geladen.</div>';
     document.getElementById('fpAlign').classList.remove('show');
     return;
   }
-  glbInfo.parts.forEach((p,idx)=>{
+  bodies.forEach((b,idx)=>{
     const it=document.createElement('div');
     it.className='partItem'+(idx===selectedPartIdx?' active':'');
     const sw=document.createElement('div'); sw.className='partSw';
-    const mat=p.materialIdx>=0 ? glbInfo.materials[p.materialIdx] : null;
+    const matIdx = b.materialIdxs[0];
+    const mat=matIdx>=0 ? glbInfo.materials[matIdx] : null;
     sw.style.background = mat ? colorToHex(mat.baseColor) : '#555';
     sw.title = mat ? mat.name : 'kein Material';
     const nm=document.createElement('span'); nm.className='partName';
-    nm.textContent=p.name; nm.title=p.name;
+    nm.textContent=b.name; nm.title=b.name;
     const tc=document.createElement('span'); tc.className='partTris';
-    tc.textContent=p.triCount+' △';
+    tc.textContent=b.triCount+' △';
     it.appendChild(sw); it.appendChild(nm); it.appendChild(tc);
     it.addEventListener('click', ()=>{
       selectedPartIdx = (selectedPartIdx===idx) ? -1 : idx;
@@ -945,12 +1009,12 @@ function renderPartsList(){
   document.getElementById('fpAlign').classList.toggle('show', selectedPartIdx>=0);
 }
 
-// PCA-Hauptrichtung der Eckpunkte eines Teils — Power-Iteration über 3x3-Kovarianz.
-function principalDirection(part){
-  if(!part || part.triCount===0) return [0,1,0];
+// PCA-Hauptrichtung der Eckpunkte — akzeptiert Body ODER Part (gleiche Felder).
+function principalDirection(obj){
+  if(!obj || obj.triCount===0) return [0,1,0];
   const verts=new Set();
-  for(let t=0;t<part.triCount;t++){
-    const i=(part.triStart+t)*3;
+  for(let t=0;t<obj.triCount;t++){
+    const i=(obj.triStart+t)*3;
     verts.add(MI[i]); verts.add(MI[i+1]); verts.add(MI[i+2]);
   }
   if(verts.size<2) return [0,1,0];
@@ -981,9 +1045,9 @@ function principalDirection(part){
 // Bildschirm-X / -Y / -Z zusammenfällt (aka col_i von rot(arcQ) = D_world).
 function alignPartTo(axisIdx){
   if(selectedPartIdx<0 || !glbInfo) return;
-  const p=glbInfo.parts[selectedPartIdx];
-  if(!p||p.triCount===0) return;
-  const D=principalDirection(p);
+  const b=glbInfo.bodies[selectedPartIdx];
+  if(!b||b.triCount===0) return;
+  const D=principalDirection(b);
   const rot=q2m(arcQ);
   // cs_D = rot^T * D
   const cs=[
@@ -1069,7 +1133,18 @@ function showGlbPopup(mx,my){
   rows.push(`<div class="row"><span class="k">Teile</span><span class="v">${glbInfo.parts.length}</span></div>`);
   rows.push(`<div class="row"><span class="k">Materialien</span><span class="v">${glbInfo.materials.length}</span></div>`);
   if(glbInfo.asset.generator) rows.push(`<div class="row"><span class="k">Generator</span><span class="v" title="${glbInfo.asset.generator}">${glbInfo.asset.generator}</span></div>`);
+  // Aktion: getroffene Fläche als Schnittebene verwenden
+  if(hit && !hit.isCap){
+    rows.push('<button class="action" id="glbpUseCut">Diese Fläche als Schnittebene</button>');
+  }
   pop.innerHTML=rows.join('');
+  const btn=document.getElementById('glbpUseCut');
+  if(btn){
+    btn.addEventListener('click',()=>{
+      setCustomCutFromFace(hit.normal, hit.point);
+      hideGlbPopup();
+    });
+  }
   pop.style.display='block';
   // Position clamp'en, damit das Popup nicht vom Rand verdeckt wird
   const w=pop.offsetWidth, h=pop.offsetHeight;
@@ -1091,10 +1166,8 @@ function pickModel(mx,my){
   if(!ray) return null;
   const {ro,rd}=ray;
   const nTri=MI.length/3;
-  // Shader-Clipping: Dreieck verworfen wenn coord[clipAxis] > clipVal()
-  // (Cap = Fläche, wo coord[clipAxis] == clipVal() und wir sonst im Inneren wären)
-  const cv=clipVal();
-  // Alle Schnittpunkte sammeln
+  // Generische Cut-Ebene: discard where N·p > d  → kept where N·p <= d
+  const N=cutNormal(), D=cutD();
   const hits=[];
   for(let t=0;t<nTri;t++){
     const i0=MI[t*3],i1=MI[t*3+1],i2=MI[t*3+2];
@@ -1107,39 +1180,39 @@ function pickModel(mx,my){
       const nl=Math.sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
       if(nl>1e-9){ n=[n[0]/nl,n[1]/nl,n[2]/nl]; }
       if(dot3(n,rd)>0) n=[-n[0],-n[1],-n[2]];
-      const kept=h.point[clipAxis]<=cv;
+      const sd=N[0]*h.point[0]+N[1]*h.point[1]+N[2]*h.point[2]-D;
+      const kept=sd<=1e-6;
       hits.push({...h,triIdx:t,v0,v1,v2,normal:n,kept});
     }
   }
   hits.sort((a,b)=>a.t-b.t);
 
-  // Cap-Ebenenschnittpunkt: coord[clipAxis] == cv
+  // Cap-Ebenenschnittpunkt: N·p = D
+  const dN=N[0]*rd[0]+N[1]*rd[1]+N[2]*rd[2];
   let tCap=Infinity, capPt=null;
-  if(Math.abs(rd[clipAxis])>1e-9){
-    const tc=(cv-ro[clipAxis])/rd[clipAxis];
+  if(Math.abs(dN)>1e-9){
+    const tc=(D - (N[0]*ro[0]+N[1]*ro[1]+N[2]*ro[2]))/dN;
     if(tc>0){
       const p=[ro[0]+rd[0]*tc, ro[1]+rd[1]*tc, ro[2]+rd[2]*tc];
-      // Nur gültig, wenn im Bounding-Box (also im Querschnitt des Modells liegt)
+      // Im BBox (egal welche Ebene)
       let inBB=true;
       for(let a=0;a<3;a++){
-        if(a===clipAxis) continue;
         if(p[a]<bMin[a]-1e-6||p[a]>bMax[a]+1e-6){inBB=false;break;}
       }
       if(inBB){ tCap=tc; capPt=p; }
     }
   }
 
-  // Innen-Test am Cap: Anzahl Dreiecke vor tCap (ungerade → ray ist im Modell)
   let before=0;
   for(const h of hits){ if(h.t<tCap) before++; else break; }
   const firstKept=hits.find(h=>h.kept);
   const insideAtCap=(before%2)===1;
 
-  // Cap sichtbar dort, wo wir innen sind UND Cap näher als erstes sichtbares Dreieck
   if(capPt && insideAtCap && (!firstKept || tCap<firstKept.t)){
-    let nAxis=[0,0,0]; nAxis[clipAxis]=1;
-    if(dot3(nAxis,rd)>0) nAxis[clipAxis]=-1;
-    return {t:tCap, point:capPt, normal:nAxis, triIdx:-1, isCap:true};
+    // Cap-Normale = N (oder -N, damit sie zum Betrachter zeigt)
+    let nOut=[N[0],N[1],N[2]];
+    if(dot3(nOut,rd)>0) nOut=[-nOut[0],-nOut[1],-nOut[2]];
+    return {t:tCap, point:capPt, normal:nOut, triIdx:-1, isCap:true};
   }
   return firstKept || null;
 }
@@ -1261,8 +1334,22 @@ cv.oncontextmenu=e=>{
   showGlbPopup(e.clientX,e.clientY);
 };
 cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0.001,Math.min(100,oSize));};
-document.getElementById('cutR').oninput=e=>{clipT=+e.target.value;document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';lastCA=-1;};
-document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));b.classList.add('on');clipAxis=+b.dataset.a;lastCA=-1;});
+document.getElementById('cutR').oninput=e=>{
+  const t=+e.target.value;
+  if(customPlane){ customPlane.t=t; } else { clipT=t; }
+  document.getElementById('cutV').textContent=Math.round(t*100)+'%';
+  lastCustom=null; // generische Kontur neu berechnen
+};
+document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  clipAxis=+b.dataset.a;
+  clearCustomCut();
+  // Slider auf aktuellen clipT zurücksetzen
+  document.getElementById('cutR').value=String(clipT);
+  document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';
+  lastCustom=null;
+});
 document.getElementById('sphR').oninput=e=>{
   _sphereScale=+e.target.value;
   document.getElementById('sphV').textContent=(+e.target.value).toFixed(2);
@@ -1426,7 +1513,22 @@ function parseGLB(buf){
     }
   }
   for(let i=0;i<N.length;i+=3){const l=Math.sqrt(N[i]**2+N[i+1]**2+N[i+2]**2);if(l>0){N[i]/=l;N[i+1]/=l;N[i+2]/=l;}}
-  return{positions:P,normals:N,indices:I,parts,materials,assetInfo:json.asset||{}};
+  // Bodies = zusammenhängende Primitives pro Node (ein GLB-Körper = ein Eintrag)
+  const bodies=[];
+  let curBody=null;
+  for(let i=0;i<parts.length;i++){
+    const p=parts[i];
+    if(curBody && curBody.name===p.name){
+      curBody.partIndices.push(i);
+      curBody.triCount+=p.triCount;
+      if(!curBody.materialIdxs.includes(p.materialIdx)) curBody.materialIdxs.push(p.materialIdx);
+    } else {
+      curBody={name:p.name, triStart:p.triStart, triCount:p.triCount,
+               partIndices:[i], materialIdxs:[p.materialIdx]};
+      bodies.push(curBody);
+    }
+  }
+  return{positions:P,normals:N,indices:I,parts,bodies,materials,assetInfo:json.asset||{}};
 }
 function concat32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Float32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
 function concatU32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Uint32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
@@ -1457,7 +1559,7 @@ async function loadFile(file){
     const nv=m.positions.length/3, nt=m.indices.length/3;
     // GLB-Metadaten für Rechtsklick-Info-Popup + Teile-Panel speichern
     glbInfo={fileName:file.name, sizeBytes:file.size, vertCount:nv, triCount:nt,
-             parts:m.parts, materials:m.materials, asset:m.assetInfo};
+             parts:m.parts, bodies:m.bodies, materials:m.materials, asset:m.assetInfo};
     selectedPartIdx=-1;
     renderPartsList();
     info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
@@ -1479,7 +1581,7 @@ window.__loadGLBBuffer=function(name,buf){
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
     glbInfo={fileName:name, sizeBytes:buf.byteLength||0, vertCount:nv, triCount:nt,
-             parts:m.parts, materials:m.materials, asset:m.assetInfo};
+             parts:m.parts, bodies:m.bodies, materials:m.materials, asset:m.assetInfo};
     selectedPartIdx=-1;
     renderPartsList();
     info.textContent=name+': '+nv+' verts, '+nt+' tris (wiederhergestellt)';
@@ -1504,7 +1606,9 @@ function render(){
   view[14]=-(view[2]*cp[0]+view[6]*cp[1]+view[10]*cp[2]);view[15]=1;
   const proj=ortho(-oSize*asp,oSize*asp,-oSize,oSize,1,100000);
   const vp=mul(proj,view);
-  const cn=[0,0,0];cn[clipAxis]=-1;const cv4=[cn[0],cn[1],cn[2],clipVal()];
+  // Generische Schnittebene: discard where -N·p + d < 0 ⟺ N·p > d
+  const __N=cutNormal(), __D=cutD();
+  const cv4=[-__N[0], -__N[1], -__N[2], __D];
 
   gl.clearColor(0.106,0.118,0.141,1);
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
@@ -1534,18 +1638,17 @@ function render(){
   gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
   gl.disable(gl.CULL_FACE);
 
-  // Pass 2.5: Hervorhebung des ausgewählten Teils (orange Überblendung, sichtbar
-  // auch durch davor liegende Geometrie dank deaktivierter Tiefenprüfung).
-  if(selectedPartIdx>=0 && glbInfo && glbInfo.parts[selectedPartIdx]){
-    const p=glbInfo.parts[selectedPartIdx];
-    if(p.triCount>0){
+  // Pass 2.5: Hervorhebung des ausgewählten Körpers (alle seine Primitive)
+  if(selectedPartIdx>=0 && glbInfo && glbInfo.bodies[selectedPartIdx]){
+    const b=glbInfo.bodies[selectedPartIdx];
+    if(b.triCount>0){
       gl.useProgram(pSphere);
       gl.bindVertexArray(meshVao);
       gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
       gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[1.0,0.55,0.1,0.55]);
       gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
       gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
-      gl.drawElements(gl.TRIANGLES, p.triCount*3, gl.UNSIGNED_INT, p.triStart*3*4);
+      gl.drawElements(gl.TRIANGLES, b.triCount*3, gl.UNSIGNED_INT, b.triStart*3*4);
       gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
     }
   }
