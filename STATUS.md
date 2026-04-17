@@ -1,6 +1,21 @@
 # Cado — Statuslog
 
-> 🔔 **AWAITING YOU** — #6 v3 площини з 2 осей (або axis + X/Y/Z) + #7 persistence (axes+planes зберігаються в Firestore-docі файлу, відновлюються на reload). Оси тепер по центру циліндра (algebraic circle-fit). 29/29 ✅.
+> 💤 **ПАУЗА** — повний список фіч із планування пройдено. 31/31 тестів ✅, все запушено в origin/main. Для відновлення роботи: перевір STATUS.md і пам'ять у `~/.claude/projects/-workspaces-cado/memory/`.
+
+## Останні стани (stand: пауза сеансу)
+- **Колір з GLB-матеріалу:** baseColorFactor → uniform `uC` при рендерингу кожного primitive
+- **Persistence:** axes, planes, customPlane, cut state зберігаються в Firestore-docі файлу. Debounced save (250мс) на slider.
+- **Площини з 2 осей:** `⊕ Neu` в блоці Ebenen → клік 2 осі (або 1 axis + X/Y/Z)
+- **Axis creation:** `⊕ Neu` в блоці Achsen → hover підсвічує flood-fill region, клік створює вісь (Zylinder-fit або PCA fallback, центр через algebraic circle-fit)
+- **Face-pick для cut:** `⊕ Fläche` у Schnitt-блоці; `⇒ Schnitt` кнопка на кожній створеній площині
+
+## Можливі напрямки розвитку
+- Вимірювання (відстань 2 точок, кут 2 осей, точка→площина)
+- Explode view для assembly
+- Unfold/2D drawing (великий rewrite)
+- Pick ребер/вершин (не тільки поверхонь)
+- Multi-file scene + undo/redo
+- Export сцени (axes+planes+cuts) як JSON
 
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 
