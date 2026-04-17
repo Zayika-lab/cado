@@ -1,0 +1,11 @@
+node_modules/
+test-results/
+playwright-report/
+tests/screens/
+cado-sa.json
+*-sa.json
+*adminsdk*.json
+.firebase/
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
