@@ -939,7 +939,6 @@ function updateCut(){
 // Setzt custom-Schnittebene aus einer getroffenen Fläche (Nicht-Cap) mit Normale N
 // und Basispunkt P0. Schiebereglerposition wird so gewählt, dass aktueller Hit = Ebene.
 function setCustomCutFromFace(N, P0){
-  // dMin/dMax = Projektion des Modells auf N
   let dMin=Infinity, dMax=-Infinity;
   const nv=MV.length/3;
   for(let i=0;i<nv;i++){
@@ -949,12 +948,16 @@ function setCustomCutFromFace(N, P0){
   const dAt=N[0]*P0[0]+N[1]*P0[1]+N[2]*P0[2];
   const tInit = dMax>dMin ? (dAt-dMin)/(dMax-dMin) : 0.5;
   customPlane={normal:[N[0],N[1],N[2]], dMin, dMax, t:Math.max(0,Math.min(1,tInit))};
-  // Schieberegler synchronisieren, Button-"on"-Zustände löschen
   const slider=document.getElementById('cutR');
   slider.value=String(customPlane.t);
   document.getElementById('cutV').textContent=Math.round(customPlane.t*100)+'%';
   document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));
-  lastCustom=null; // trigger recompute
+  // Auswahl einer Schnittebene aktiviert automatisch den Schnitt
+  cutEnabled=true;
+  const chk=document.getElementById('cutEnable');
+  if(chk){ chk.checked=true; }
+  document.getElementById('ctrl').classList.remove('cutOff');
+  lastCustom=null;
 }
 function clearCustomCut(){ customPlane=null; lastCustom=null; }
 
