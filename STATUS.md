@@ -1,6 +1,6 @@
 # Cado — Statuslog
 
-> 🔔 **AWAITING YOU** — #7 v1 (custom cut plane), bodies-grouping фікс ("1 файл = 1 body, не 2"), 21/21 тестів ✅, запушено. Перевір в браузері: правий клік по грані → "Diese Fläche als Schnittebene".
+> 🔔 **AWAITING YOU** — #6 v2 часткою (axis creation через cylinder-fit + PCA fallback), align-рядок прибрано з Teile-панелі, 24/24 тестів ✅. Правий клік на грані → "Achse erstellen (Zylinder / PCA)".
 
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 
@@ -53,19 +53,23 @@
 - **Тест:** `glb-info.spec.js` — 6 parts, wood #c4a076, popup містить "wood" і "chair.glb"
 - **Коміти:** `14693254`
 
-## 6. Teile-Panel (links) 🔧
+## 6. Teile-Panel (links) 🚢 v1 + v2 axis creation
 
-- **Аналіз:** таби в `filesPanel` для розділення файлів і частин; highlight через додатковий render pass по `triStart..triCount`
-- **Виконання (v1, MVP):**
-  - Таби "Dateien" / "Teile"
-  - Список з color swatch матеріалу + tri-count
-  - Клік → виділити (`selectedPartIdx`), ще клік → зняти
-  - Highlight pass: `pSphere` програма з `gl.drawElements` по діапазону, orange overlay без depth-test
-- **ВІДКЛАДЕНО на v2:**
-  - Створення осі з циліндричної поверхні (треба детекція циліндра по нормалях)
-  - Створення площини з 2 осей або осі + системної осі
-- **Тест:** `parts-panel.spec.js` — список має 6 item, клік змінює `selectedPartIdx`, screenshot з highlight
-- **Коміт:** (в процесі)
+- **v1 MVP:** таби "Dateien"/"Teile", список bodies з color swatch + tri-count,
+  клік = highlight (orange overlay через pSphere-шейдер з drawElements діапазону)
+- **v2 axis creation:**
+  - `fitCylinderAxis(body)`: збирає нормалі всіх треугольників, будує коваріацію,
+    шукає найменший eigenvector (вісь циліндра) через power-iteration на `tr*I - C`.
+    Confidence = `1 - varAlong/tr`: 1.0 для ідеального циліндра, ~0.67 для куба.
+  - `createAxisForBody(idx)`: якщо confidence > 0.85 → cylinder-fit, інакше fallback
+    до PCA вершин → osь усе одно адекватна (наприклад для ніжки Y-напрямок)
+  - Кнопка "Achse erstellen" у правоклік-popup
+  - `createdAxes[]` глобально, render pass малює кожну як LINE з власним кольором
+    поверх моделі (depthFunc ALWAYS — завжди видно)
+  - Список у Teile-панелі знизу з кнопкою "×" для видалення
+- **ВІДКЛАДЕНО на v3:** створення площини з 2 осей або axis+system-axis
+- **Тести:** `parts-panel.spec.js` (список+highlight), `axis-create.spec.js` (cylinder-fit rejects box, PCA axis ≈ Y для leg-body)
+- **Скріни:** `tests/screens/11_parts-panel-highlight.png`, `13_created-axis.png`
 
 ## 7. Schnitt als eigene Funktion 🚢 (v1, без persistence)
 
