@@ -76,10 +76,13 @@ body.facePick canvas{cursor:crosshair}
 #drop{transition:transform 0.22s ease}
 
 /* Datei-Seitenleiste links */
-#filesPanel{position:fixed;top:0;left:0;bottom:0;width:260px;z-index:18;
+#filesPanel{position:fixed;top:0;left:0;bottom:0;width:var(--panel-w,260px);z-index:18;
   background:rgba(20,22,28,0.95);border-right:1px solid rgba(74,142,255,0.2);
   display:none;flex-direction:column;backdrop-filter:blur(10px);
-  transform:translateX(-260px);transition:transform 0.22s ease}
+  transform:translateX(calc(-1 * var(--panel-w,260px)));transition:transform 0.22s ease}
+#filesPanelResize{position:absolute;top:0;right:-4px;bottom:0;width:8px;cursor:col-resize;z-index:19;
+  background:transparent;transition:background 0.15s}
+#filesPanelResize:hover,#filesPanelResize.dragging{background:rgba(74,142,255,0.3)}
 #filesPanel.show{display:flex}
 #filesPanel.open{transform:translateX(0)}
 #fpHead{padding:14px 14px 10px;border-bottom:1px solid rgba(74,142,255,0.15)}
@@ -134,16 +137,22 @@ body.facePick canvas{cursor:crosshair}
 #fpPartsHead{padding:12px 14px 8px;font-size:11px;text-transform:uppercase;
   letter-spacing:1px;color:#7a8194;font-weight:600;flex-shrink:0;
   border-bottom:1px solid rgba(74,142,255,0.1)}
-#fpPartsList{flex:1;overflow-y:auto;padding:4px 0}
-.partItem{padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
-  border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.12s}
-.partItem:hover{background:rgba(74,142,255,0.08)}
-.partItem.active{background:rgba(74,142,255,0.15);border-left:2px solid #4a8eff;padding-left:12px}
-.partSw{width:12px;height:12px;border-radius:3px;flex-shrink:0;
+#fpPartsList{flex:1;overflow-y:auto;padding:4px 0;min-height:120px}
+.treeItem{display:flex;align-items:center;gap:4px;cursor:pointer;padding:3px 14px;
+  font-size:12px;color:#c8ccd4;border-bottom:1px solid rgba(255,255,255,0.02);
+  transition:background 0.12s;white-space:nowrap}
+.treeItem:hover{background:rgba(74,142,255,0.08)}
+.treeItem.active{background:rgba(74,142,255,0.15);border-left:2px solid #4a8eff}
+.tExp{width:14px;height:14px;background:transparent;border:none;color:#7a8194;
+  cursor:pointer;font:9px monospace;padding:0;flex-shrink:0;text-align:center}
+.tExp.leaf{visibility:hidden}
+.tVis{width:14px;height:14px;margin:0;flex-shrink:0;cursor:pointer}
+.tSw{width:10px;height:10px;border-radius:2px;flex-shrink:0;
   border:1px solid rgba(255,255,255,0.15)}
-.partName{flex:1;font-size:12px;color:#c8ccd4;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.partTris{font:10px monospace;color:#7a8194;flex-shrink:0}
+.tName{flex:1;overflow:hidden;text-overflow:ellipsis}
+.tTris{font:10px monospace;color:#7a8194;flex-shrink:0}
+.treeItem.folder .tName{color:#9ba4b8}
+.treeItem.hidden-body .tName{opacity:0.35;text-decoration:line-through}
 #fpPartsEmpty{padding:20px 14px;font:12px system-ui;color:#5a5a7a;
   text-align:center;font-style:italic}
 
@@ -270,6 +279,7 @@ body.axisMode canvas{cursor:crosshair}
     </div>
     <div id="fpPlanesList"></div>
   </div>
+  <div id="filesPanelResize" title="Breite ziehen"></div>
 </div>
 
 <canvas id="c"></canvas>
@@ -763,8 +773,11 @@ precision highp float;uniform vec4 uSC;out vec4 f;void main(){f=uSC;}`);
 
 /* ═══ Mesh-Zustand ═══ */
 var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
-var glbInfo=null; // { fileName, sizeBytes, vertCount, triCount, parts[], materials[], asset }
+var glbInfo=null; // { fileName, sizeBytes, vertCount, triCount, parts[], bodies[], sceneTree[], materials[], asset }
 var selectedPartIdx=-1; // Index des hervorgehobenen Teils (-1 = keines)
+var bodyVisible=[];     // bodyVisible[i] = true → Body wird gerendert
+var partToBody=null;    // part-Index → body-Index, für schnellen Skip im Render
+var collapsedNodes=new Set(); // Knoten-IDs mit eingeklapptem Sub-Tree
 
 // Pre-berechnete Adjazenz und Dreiecksnormalen — für Flächen-Flood-Fill.
 var triAdj=null;      // Int32Array: triAdj[t*3+k] = Nachbar-Dreieck über Kante k, -1 wenn keine
@@ -1401,34 +1414,118 @@ document.querySelectorAll('.fpTab').forEach(t=>{
   t.addEventListener('click', ()=>switchTab(t.dataset.tab));
 });
 
+// Seitenleisten-Breite per Ziehen am rechten Rand + Persistenz in localStorage
+(function(){
+  const savedW=localStorage.getItem('cadoPanelW');
+  if(savedW) document.documentElement.style.setProperty('--panel-w', savedW);
+  const handle=document.getElementById('filesPanelResize');
+  let dragging=false, startX=0, startW=260;
+  handle.addEventListener('mousedown',e=>{
+    dragging=true; startX=e.clientX;
+    const css=getComputedStyle(document.documentElement).getPropertyValue('--panel-w')||'260px';
+    startW=parseInt(css,10)||260;
+    handle.classList.add('dragging');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!dragging) return;
+    const w=Math.max(200, Math.min(600, startW + (e.clientX - startX)));
+    document.documentElement.style.setProperty('--panel-w', w+'px');
+  });
+  window.addEventListener('mouseup',()=>{
+    if(!dragging) return;
+    dragging=false;
+    handle.classList.remove('dragging');
+    const w=getComputedStyle(document.documentElement).getPropertyValue('--panel-w');
+    if(w) localStorage.setItem('cadoPanelW', w.trim());
+  });
+})();
+
 function renderPartsList(){
   const list=document.getElementById('fpPartsList');
   list.innerHTML='';
-  // Bodies = semantische "ein Körper pro GLB-Node"; jeder Primitive gehört einem Body
   const bodies = glbInfo && glbInfo.bodies ? glbInfo.bodies : [];
+  const tree = glbInfo && glbInfo.sceneTree ? glbInfo.sceneTree : [];
   if(bodies.length===0){
     list.innerHTML='<div id="fpPartsEmpty">Kein Modell geladen.</div>';
     return;
   }
-  bodies.forEach((b,idx)=>{
+  // Renderfunktion: rekursiv Knoten + Kinder ausgeben
+  function addTreeRow(node, depth){
+    const hasChildren = (node.children||[]).some(c=>c.hasAnyBody);
+    const isLeaf = !hasChildren;
+    const bIdx = node.bodyIdx;
+    const body = bIdx>=0 ? bodies[bIdx] : null;
+    const visible = body ? (window.bodyVisible?window.bodyVisible[bIdx]!==false:true) : true;
+    const isSelected = body && bIdx===selectedPartIdx;
+    const collapsed = window.collapsedNodes && window.collapsedNodes.has(node.nodeIdx);
+
     const it=document.createElement('div');
-    it.className='partItem'+(idx===selectedPartIdx?' active':'');
-    const sw=document.createElement('div'); sw.className='partSw';
-    const matIdx = b.materialIdxs[0];
-    const mat=matIdx>=0 ? glbInfo.materials[matIdx] : null;
-    sw.style.background = mat ? colorToHex(mat.baseColor) : '#555';
-    sw.title = mat ? mat.name : 'kein Material';
-    const nm=document.createElement('span'); nm.className='partName';
-    nm.textContent=b.name; nm.title=b.name;
-    const tc=document.createElement('span'); tc.className='partTris';
-    tc.textContent=b.triCount+' △';
-    it.appendChild(sw); it.appendChild(nm); it.appendChild(tc);
-    it.addEventListener('click', ()=>{
-      selectedPartIdx = (selectedPartIdx===idx) ? -1 : idx;
+    it.className='treeItem'+(body?'':' folder')+(isSelected?' active':'')+(body&&!visible?' hidden-body':'');
+    it.style.paddingLeft=(10+depth*14)+'px';
+
+    const ex=document.createElement('button');
+    ex.className='tExp'+(isLeaf?' leaf':'');
+    ex.textContent=isLeaf?'':(collapsed?'▸':'▾');
+    ex.addEventListener('click',e=>{
+      e.stopPropagation();
+      if(collapsed) window.collapsedNodes.delete(node.nodeIdx);
+      else window.collapsedNodes.add(node.nodeIdx);
       renderPartsList();
     });
+
+    const vis=document.createElement('input');
+    vis.type='checkbox'; vis.className='tVis'; vis.checked=visible;
+    vis.addEventListener('click',e=>e.stopPropagation());
+    vis.addEventListener('change',e=>{
+      const checked=e.target.checked;
+      // Rekursiv für diesen Knoten + alle Kinder die einen Body haben
+      (function apply(n){
+        if(n.bodyIdx>=0 && window.bodyVisible) window.bodyVisible[n.bodyIdx]=checked;
+        for(const c of (n.children||[])) apply(c);
+      })(node);
+      renderPartsList();
+    });
+
+    // Für Bodies: Material-Swatch anzeigen
+    let sw=null;
+    if(body){
+      sw=document.createElement('div'); sw.className='tSw';
+      const matIdx=body.materialIdxs[0];
+      const mat=matIdx>=0 ? glbInfo.materials[matIdx] : null;
+      sw.style.background=mat ? colorToHex(mat.baseColor) : '#555';
+      sw.title=mat ? mat.name : 'kein Material';
+    }
+
+    const nm=document.createElement('span'); nm.className='tName';
+    nm.textContent=node.name; nm.title=node.name;
+
+    let tc=null;
+    if(body){
+      tc=document.createElement('span'); tc.className='tTris';
+      tc.textContent=body.triCount+' △';
+    }
+
+    it.appendChild(ex); it.appendChild(vis);
+    if(sw) it.appendChild(sw);
+    it.appendChild(nm);
+    if(tc) it.appendChild(tc);
+
+    if(body){
+      it.addEventListener('click',()=>{
+        selectedPartIdx=(selectedPartIdx===bIdx)?-1:bIdx;
+        renderPartsList();
+      });
+    }
     list.appendChild(it);
-  });
+
+    if(!collapsed){
+      for(const c of (node.children||[])){
+        if(c.hasAnyBody) addTreeRow(c, depth+1);
+      }
+    }
+  }
+  for(const root of tree){ if(root.hasAnyBody) addTreeRow(root, 0); }
   // Achsenliste
   const axL=document.getElementById('fpAxesList');
   axL.innerHTML='';
@@ -2294,6 +2391,7 @@ function parseGLB(buf){
   const parts=[];
 
   // Mesh mit Weltmatrix verarbeiten (Position + Normale transformieren)
+  let currentNodeIdx=-1;
   function processMesh(meshIdx,W,pathName){
     const mesh=json.meshes[meshIdx];
     for(const prim of mesh.primitives){
@@ -2330,7 +2428,8 @@ function parseGLB(buf){
         name: pathName || mesh.name || ('part'+parts.length),
         meshName: mesh.name || null,
         triStart: triOff, triCount,
-        materialIdx: prim.material!==undefined ? prim.material : -1
+        materialIdx: prim.material!==undefined ? prim.material : -1,
+        nodeIdx: currentNodeIdx
       });
       triOff+=triCount;
       voff+=nv;
@@ -2343,7 +2442,7 @@ function parseGLB(buf){
     const W=mMul(parentMat,nodeLocalMat(n));
     const nodeName=n.name || ('node'+nodeIdx);
     const pn=pathName ? pathName+'/'+nodeName : nodeName;
-    if(n.mesh!==undefined)processMesh(n.mesh,W,pn);
+    if(n.mesh!==undefined){ currentNodeIdx=nodeIdx; processMesh(n.mesh,W,pn); currentNodeIdx=-1; }
     if(n.children)for(const c of n.children)walkNode(c,W,pn);
   }
 
@@ -2381,11 +2480,30 @@ function parseGLB(buf){
       if(!curBody.materialIdxs.includes(p.materialIdx)) curBody.materialIdxs.push(p.materialIdx);
     } else {
       curBody={name:p.name, triStart:p.triStart, triCount:p.triCount,
-               partIndices:[i], materialIdxs:[p.materialIdx]};
+               partIndices:[i], materialIdxs:[p.materialIdx],
+               nodeIdx:p.nodeIdx};
       bodies.push(curBody);
     }
   }
-  return{positions:P,normals:N,indices:I,parts,bodies,materials,assetInfo:json.asset||{}};
+  // Szenenbaum: glTF-Knoten-Hierarchie + Mapping auf Bodies
+  const nodeToBody=new Map();
+  bodies.forEach((b,i)=>{ if(b.nodeIdx>=0) nodeToBody.set(b.nodeIdx,i); });
+  function buildTreeNode(nIdx){
+    const n=json.nodes[nIdx];
+    const tn={
+      nodeIdx:nIdx,
+      name:n.name || ('node'+nIdx),
+      bodyIdx: nodeToBody.has(nIdx) ? nodeToBody.get(nIdx) : -1,
+      children:(n.children||[]).map(buildTreeNode)
+    };
+    // Leere Organisations-Knoten (weder eigener Body noch Kinder mit Bodies) ausfiltern
+    tn.hasAnyBody = tn.bodyIdx>=0 || tn.children.some(c=>c.hasAnyBody);
+    return tn;
+  }
+  const rootIds = scene && scene.nodes ? scene.nodes : (json.nodes ? json.nodes.map((_,i)=>i) : []);
+  const sceneTree = rootIds.map(buildTreeNode).filter(n=>n.hasAnyBody);
+
+  return{positions:P,normals:N,indices:I,parts,bodies,materials,sceneTree,assetInfo:json.asset||{}};
 }
 function concat32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Float32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
 function concatU32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Uint32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
@@ -2414,9 +2532,13 @@ async function loadFile(file){
     const m=parseGLB(buf);
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
-    // GLB-Metadaten für Rechtsklick-Info-Popup + Teile-Panel speichern
     glbInfo={fileName:file.name, sizeBytes:file.size, vertCount:nv, triCount:nt,
-             parts:m.parts, bodies:m.bodies, materials:m.materials, asset:m.assetInfo};
+             parts:m.parts, bodies:m.bodies, sceneTree:m.sceneTree||[],
+             materials:m.materials, asset:m.assetInfo};
+    window.bodyVisible = new Array(m.bodies.length).fill(true);
+    window.partToBody = new Int32Array(m.parts.length);
+    m.bodies.forEach((b,bi)=>{ for(const pi of b.partIndices) window.partToBody[pi]=bi; });
+    window.collapsedNodes = new Set();
     selectedPartIdx=-1;
     renderPartsList();
     info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
@@ -2438,7 +2560,12 @@ window.__loadGLBBuffer=function(name,buf){
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
     glbInfo={fileName:name, sizeBytes:buf.byteLength||0, vertCount:nv, triCount:nt,
-             parts:m.parts, bodies:m.bodies, materials:m.materials, asset:m.assetInfo};
+             parts:m.parts, bodies:m.bodies, sceneTree:m.sceneTree||[],
+             materials:m.materials, asset:m.assetInfo};
+    window.bodyVisible = new Array(m.bodies.length).fill(true);
+    window.partToBody = new Int32Array(m.parts.length);
+    m.bodies.forEach((b,bi)=>{ for(const pi of b.partIndices) window.partToBody[pi]=bi; });
+    window.collapsedNodes = new Set();
     selectedPartIdx=-1;
     renderPartsList();
     info.textContent=name+': '+nv+' verts, '+nt+' tris (wiederhergestellt)';
@@ -2496,8 +2623,10 @@ function render(){
   gl.uniform4fv(gl.getUniformLocation(pMain,'uClip'),cv4);
   const uCLoc=gl.getUniformLocation(pMain,'uC');
   if(glbInfo && glbInfo.parts && glbInfo.parts.length>0){
-    for(const p of glbInfo.parts){
+    for(let pi=0;pi<glbInfo.parts.length;pi++){
+      const p=glbInfo.parts[pi];
       if(p.triCount===0) continue;
+      if(window.bodyVisible && !window.bodyVisible[window.partToBody[pi]]) continue;
       const mat=p.materialIdx>=0 ? glbInfo.materials[p.materialIdx] : null;
       const col=materialColorFromName(mat);
       gl.uniform3fv(uCLoc,col);
@@ -2587,8 +2716,10 @@ function render(){
   if(cutEnabled && glbInfo && glbInfo.bodies && glbInfo.bodies.length>0){
     const capMVP=mul(vp,capMat());
     gl.enable(gl.STENCIL_TEST);
-    for(const body of glbInfo.bodies){
+    for(let bi=0;bi<glbInfo.bodies.length;bi++){
+      const body=glbInfo.bodies[bi];
       if(body.triCount===0) continue;
+      if(window.bodyVisible && !window.bodyVisible[bi]) continue;
       // 1) Stencil für diesen Body mit INVERT-Parität.
       // WICHTIG: depth-TEST auch aus, sonst werden verdeckte Dreiecke nicht gezählt
       // und die Parität ist falsch (Cap-Löcher).

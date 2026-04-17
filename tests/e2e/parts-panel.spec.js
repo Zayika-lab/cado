@@ -17,10 +17,10 @@ test('parts panel lists parts, click toggles highlight', async ({ page }) => {
   await page.locator('.fpTab[data-tab="parts"]').click();
   await expect(page.locator('#fpPartsTab.active')).toBeVisible();
 
-  // chair.glb has 6 parts
-  const items = page.locator('.partItem');
+  // chair.glb has 6 bodies shown as tree items
+  const items = page.locator('.treeItem');
   await expect(items).toHaveCount(6);
-  const firstName = await items.first().locator('.partName').textContent();
+  const firstName = await items.first().locator('.tName').textContent();
   console.log('first part:', firstName);
   expect(firstName).toBe('seat');
 
