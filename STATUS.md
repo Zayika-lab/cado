@@ -1,6 +1,6 @@
 # Cado — Statuslog
 
-> 🔔 **AWAITING YOU** — axis/face-pick hover тепер підсвічує ЛИШЕ поверхню під курсором (flood-fill з порогом 31° по кутам нормалей), не весь body. На test_6.glb: 80/11966 трикутників → Zylinder-axis Y. 28/28 ✅.
+> 🔔 **AWAITING YOU** — #6 v3 площини з 2 осей (або axis + X/Y/Z) + #7 persistence (axes+planes зберігаються в Firestore-docі файлу, відновлюються на reload). Оси тепер по центру циліндра (algebraic circle-fit). 29/29 ✅.
 
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 

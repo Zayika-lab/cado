@@ -16,8 +16,11 @@ service cloud.firestore {
       // Löschen nur durch den Eigentümer
       allow delete: if request.auth != null
                     && resource.data.uid == request.auth.uid;
-      // Aktualisieren ist nicht erlaubt
-      allow update: if false;
+      // Aktualisieren: nur Eigentümer; uid darf sich nicht ändern.
+      // Genutzt für persistente Achsen/Ebenen pro Datei.
+      allow update: if request.auth != null
+                    && resource.data.uid == request.auth.uid
+                    && request.resource.data.uid == request.auth.uid;
     }
 
     // Standard: alles andere verweigern

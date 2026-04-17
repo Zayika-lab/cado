@@ -166,6 +166,31 @@ body.axisMode canvas{cursor:crosshair}
 .axisItem .axDel:hover{color:#ff6b6b}
 .axEmpty{padding:8px 14px;font:11px system-ui;color:#5a5a7a;font-style:italic}
 
+#fpPlanesHead{padding:12px 14px 6px;font-size:11px;text-transform:uppercase;
+  letter-spacing:1px;color:#7a8194;font-weight:600;
+  border-top:1px solid rgba(74,142,255,0.1);margin-top:4px;
+  display:flex;justify-content:space-between;align-items:center}
+#planeModeBtn{background:rgba(74,142,255,0.12);border:1px solid rgba(74,142,255,0.35);
+  border-radius:4px;color:#4a8eff;padding:3px 10px;font:11px system-ui;cursor:pointer;
+  text-transform:none;letter-spacing:0}
+#planeModeBtn:hover{background:rgba(74,142,255,0.25)}
+#planeModeBtn.active{background:#4a8eff;color:#fff}
+#fpPlanesList{padding:2px 0 10px}
+.planeItem{padding:6px 14px;display:flex;align-items:center;gap:8px;font:12px system-ui;color:#c8ccd4;border-bottom:1px solid rgba(255,255,255,0.03)}
+.planeItem .plSw{width:14px;height:10px;border-radius:2px;flex-shrink:0;opacity:0.7}
+.planeItem .plName{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.planeItem .plDel{background:transparent;border:none;color:#666;cursor:pointer;font-size:14px;padding:0 4px}
+.planeItem .plDel:hover{color:#ff6b6b}
+.axisItem.planePick{cursor:pointer;background:rgba(74,142,255,0.05)}
+.axisItem.planePick:hover{background:rgba(74,142,255,0.2)}
+.axBadge{display:inline-block;width:18px;height:18px;border-radius:4px;
+  background:#4a8eff;color:#fff;font:bold 11px system-ui;text-align:center;line-height:18px;flex-shrink:0}
+#fpPlaneCoords{padding:6px 14px;font:11px system-ui;color:#7a8194;display:none;gap:4px}
+#fpPlaneCoords.show{display:flex}
+#fpPlaneCoords button{padding:3px 10px;font:11px monospace;border:1px solid rgba(74,142,255,0.4);
+  border-radius:4px;background:transparent;color:#4a8eff;cursor:pointer}
+#fpPlaneCoords button:hover{background:rgba(74,142,255,0.2)}
+
 /* Info-Popup (Rechtsklick auf Modell → Teil/Material-Eigenschaften) */
 #glbPop{position:fixed;z-index:30;display:none;min-width:220px;max-width:320px;
   background:rgba(20,22,28,0.96);border:1px solid rgba(74,142,255,0.35);
@@ -231,6 +256,15 @@ body.axisMode canvas{cursor:crosshair}
       <button id="axisModeBtn" title="Achse durch Klick auf Zylinderfläche erstellen">⊕ Neu</button>
     </div>
     <div id="fpAxesList"></div>
+    <div id="fpPlanesHead">Erstellte Ebenen
+      <button id="planeModeBtn" title="Ebene aus zwei Achsen (oder Achse + X/Y/Z) erstellen">⊕ Neu</button>
+    </div>
+    <div id="fpPlaneCoords">+ Koord-Achse:
+      <button data-co="0">X</button>
+      <button data-co="1">Y</button>
+      <button data-co="2">Z</button>
+    </div>
+    <div id="fpPlanesList"></div>
   </div>
 </div>
 
@@ -268,7 +302,7 @@ body.axisMode canvas{cursor:crosshair}
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
   import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut, connectAuthEmulator }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs, deleteDoc, doc, connectFirestoreEmulator }
+  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs, deleteDoc, doc, updateDoc, connectFirestoreEmulator }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
   import { getStorage, ref as sRef, uploadBytes, getBytes, deleteObject, connectStorageEmulator }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-storage.js";
@@ -497,11 +531,46 @@ body.axisMode canvas{cursor:crosshair}
     else if (pct >= 70) fpQuotaFill.classList.add('warn');
   }
 
+  // Hilfsfunktionen für Persistenz von Achsen und Ebenen pro Datei
+  window.__saveSceneObjects = async () => {
+    if (!activeDocId) { console.log('[save] no activeDocId'); return; }
+    try {
+      const payload = {
+        axes: (window.createdAxes || []).map(a => ({
+          name: a.name, origin: a.origin, direction: a.direction,
+          length: a.length, color: a.color, bodyIdx: a.bodyIdx ?? -1
+        })),
+        planes: (window.createdPlanes || []).map(p => ({
+          name: p.name, origin: p.origin, normal: p.normal,
+          u: p.u, v: p.v, size: p.size, color: p.color
+        }))
+      };
+      await updateDoc(doc(db, 'glb_loads', activeDocId), payload);
+      console.log('[save] ok — axes:', payload.axes.length, 'planes:', payload.planes.length);
+    } catch (e) { console.warn('[save] FAILED:', e.code || e.message); }
+  };
+  window.__loadSceneObjects = (f) => {
+    // Lokale Arrays aus Firestore-Dokument-Feldern befüllen und Buffer neu bauen
+    if (window.createdAxes) { window.createdAxes.length = 0; }
+    if (window.createdPlanes) { window.createdPlanes.length = 0; }
+    if (f.axes && Array.isArray(f.axes)) {
+      for (const a of f.axes) window.createdAxes.push({ ...a });
+    }
+    if (f.planes && Array.isArray(f.planes)) {
+      for (const p of f.planes) window.createdPlanes.push({ ...p });
+    }
+    if (window.rebuildAxisBuffer) window.rebuildAxisBuffer();
+    if (window.rebuildPlaneBuffer) window.rebuildPlaneBuffer();
+    if (window.renderPartsList) window.renderPartsList();
+  };
+
   // Konkrete Datei laden (IDB zuerst, Firebase als Fallback)
   async function loadFile(f) {
     const info = document.getElementById('info');
     activeDocId = f.docId;
     renderFiles();
+    // Achsen/Ebenen aus Firestore-Dokument wiederherstellen
+    try { window.__loadSceneObjects(f); } catch (e) { console.warn('SceneObjects laden:', e); }
     try {
       const local = await idbGet(f.docId);
       if (local && local.buf) {
@@ -733,6 +802,86 @@ function floodSmoothRegion(startTri, threshold){
 // Benutzererzeugte Achsen: { name, origin:[x,y,z], direction:[x,y,z], length, color:[r,g,b], bodyIdx }
 var createdAxes=[];
 var axisVao=null, axisBuf=null;
+// Benutzererzeugte Ebenen: { name, origin, normal, u:[x,y,z], v:[x,y,z], size, color:[r,g,b,a] }
+var createdPlanes=[];
+var planeVao=null, planeBuf=null, planeIdxBuf=null, planeIdxCount=0;
+function rebuildPlaneBuffer(){
+  if(!planeBuf){ planeBuf=gl.createBuffer(); planeIdxBuf=gl.createBuffer(); }
+  if(!planeVao){
+    planeVao=gl.createVertexArray();
+    gl.bindVertexArray(planeVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER,planeBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,planeIdxBuf);
+  }
+  // 4 Ecken pro Ebene (Quad), 6 Indices (2 Dreiecke)
+  const posData=[], idxData=[];
+  for(let i=0;i<createdPlanes.length;i++){
+    const p=createdPlanes[i];
+    const s=p.size*0.5;
+    const o=p.origin;
+    const c00=[o[0]-s*(p.u[0]+p.v[0]), o[1]-s*(p.u[1]+p.v[1]), o[2]-s*(p.u[2]+p.v[2])];
+    const c10=[o[0]+s*(p.u[0]-p.v[0]), o[1]+s*(p.u[1]-p.v[1]), o[2]+s*(p.u[2]-p.v[2])];
+    const c11=[o[0]+s*(p.u[0]+p.v[0]), o[1]+s*(p.u[1]+p.v[1]), o[2]+s*(p.u[2]+p.v[2])];
+    const c01=[o[0]-s*(p.u[0]-p.v[0]), o[1]-s*(p.u[1]-p.v[1]), o[2]-s*(p.u[2]-p.v[2])];
+    const base=i*4;
+    posData.push(...c00, ...c10, ...c11, ...c01);
+    idxData.push(base,base+1,base+2, base,base+2,base+3);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER,planeBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(posData),gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,planeIdxBuf);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idxData),gl.DYNAMIC_DRAW);
+  planeIdxCount=idxData.length;
+}
+
+function createPlaneFromAxes(a1, a2){
+  const d1=a1.direction, d2=a2.direction;
+  // Normale = d1 × d2; bei parallelen Achsen: (o2 - o1) × d1
+  let nx=d1[1]*d2[2]-d1[2]*d2[1];
+  let ny=d1[2]*d2[0]-d1[0]*d2[2];
+  let nz=d1[0]*d2[1]-d1[1]*d2[0];
+  let nl=Math.sqrt(nx*nx+ny*ny+nz*nz);
+  if(nl<1e-6){
+    const diffX=a2.origin[0]-a1.origin[0], diffY=a2.origin[1]-a1.origin[1], diffZ=a2.origin[2]-a1.origin[2];
+    nx=diffY*d1[2]-diffZ*d1[1];
+    ny=diffZ*d1[0]-diffX*d1[2];
+    nz=diffX*d1[1]-diffY*d1[0];
+    nl=Math.sqrt(nx*nx+ny*ny+nz*nz);
+    if(nl<1e-6) return null;
+  }
+  const normal=[nx/nl, ny/nl, nz/nl];
+  const origin=[(a1.origin[0]+a2.origin[0])/2, (a1.origin[1]+a2.origin[1])/2, (a1.origin[2]+a2.origin[2])/2];
+  // u = projection of d1 onto plane (in plane); v = normal × u
+  const dn=d1[0]*normal[0]+d1[1]*normal[1]+d1[2]*normal[2];
+  let ux=d1[0]-dn*normal[0], uy=d1[1]-dn*normal[1], uz=d1[2]-dn*normal[2];
+  let ul=Math.sqrt(ux*ux+uy*uy+uz*uz);
+  if(ul<1e-6){ ux=1; uy=0; uz=0; ul=1; }
+  ux/=ul; uy/=ul; uz/=ul;
+  const vx=normal[1]*uz-normal[2]*uy, vy=normal[2]*ux-normal[0]*uz, vz=normal[0]*uy-normal[1]*ux;
+  const size=(maxDim||1)*1.4;
+  const label='Ebene: '+(a1.name||'A').split(':')[0]+' × '+(a2.name||'B').split(':')[0];
+  createdPlanes.push({name:label, origin, normal, u:[ux,uy,uz], v:[vx,vy,vz], size, color:[0.35,0.9,0.45,0.28]});
+  rebuildPlaneBuffer();
+  renderPartsList();
+  if(window.__saveSceneObjects) window.__saveSceneObjects();
+}
+function createPlaneFromAxisAndCoord(axisIdx, coordIdx){
+  const a1=createdAxes[axisIdx];
+  if(!a1) return null;
+  const d2=[0,0,0]; d2[coordIdx]=1;
+  const a2={direction:d2, origin:[...a1.origin]};
+  return createPlaneFromAxes(a1,a2);
+}
+function deletePlane(idx){
+  if(idx>=0 && idx<createdPlanes.length){
+    createdPlanes.splice(idx,1);
+    rebuildPlaneBuffer();
+    renderPartsList();
+    if(window.__saveSceneObjects) window.__saveSceneObjects();
+  }
+}
 function rebuildAxisBuffer(){
   if(!axisBuf){ axisBuf=gl.createBuffer(); }
   if(!axisVao){
@@ -784,7 +933,8 @@ function createAxisForBody(bodyIdx){
   const a={name:label, origin, direction:axis, length:length*1.3, color:[1.0,0.75,0.15], bodyIdx};
   createdAxes.push(a);
   rebuildAxisBuffer();
-  renderPartsList(); // Liste aktualisieren (falls Axis-Einträge gezeigt)
+  renderPartsList();
+  if(window.__saveSceneObjects) window.__saveSceneObjects();
   return a;
 }
 function deleteAxis(idx){
@@ -792,6 +942,7 @@ function deleteAxis(idx){
     createdAxes.splice(idx,1);
     rebuildAxisBuffer();
     renderPartsList();
+    if(window.__saveSceneObjects) window.__saveSceneObjects();
   }
 }
 
@@ -1154,21 +1305,85 @@ function renderPartsList(){
   const axL=document.getElementById('fpAxesList');
   axL.innerHTML='';
   if(createdAxes.length===0){
-    axL.innerHTML='<div class="axEmpty">Rechtsklick auf Fläche → Achse erstellen</div>';
+    axL.innerHTML='<div class="axEmpty">"⊕ Neu" aktivieren, dann Fläche anklicken</div>';
   } else {
     createdAxes.forEach((a,i)=>{
-      const it=document.createElement('div'); it.className='axisItem';
-      const ln=document.createElement('div'); ln.className='axLine';
-      const [r,g,b]=a.color;
-      ln.style.background=`rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+      const it=document.createElement('div');
+      it.className='axisItem'+(planeMode?' planePick':'');
+      const pickPos=planeSelectedAxes.indexOf(i);
+      if(pickPos>=0){
+        const bdg=document.createElement('span'); bdg.className='axBadge';
+        bdg.textContent=String.fromCharCode(65+pickPos); // A, B
+        it.appendChild(bdg);
+      } else {
+        const ln=document.createElement('div'); ln.className='axLine';
+        const [r,g,b]=a.color;
+        ln.style.background=`rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+        it.appendChild(ln);
+      }
       const nm=document.createElement('span'); nm.className='axName';
       nm.textContent=a.name; nm.title=`dir=(${a.direction.map(x=>x.toFixed(2)).join(',')})`;
-      const del=document.createElement('button'); del.className='axDel'; del.textContent='×'; del.title='Achse löschen';
-      del.addEventListener('click',(e)=>{ e.stopPropagation(); deleteAxis(i); });
-      it.appendChild(ln); it.appendChild(nm); it.appendChild(del);
+      it.appendChild(nm);
+      if(!planeMode){
+        const del=document.createElement('button'); del.className='axDel'; del.textContent='×'; del.title='Achse löschen';
+        del.addEventListener('click',(e)=>{ e.stopPropagation(); deleteAxis(i); });
+        it.appendChild(del);
+      }
+      if(planeMode){
+        it.addEventListener('click',()=>planeSelectAxis(i));
+      }
       axL.appendChild(it);
     });
   }
+  // Koord-Achsen-Quickbuttons bei laufender Plane-Auswahl mit genau 1 Achse
+  document.getElementById('fpPlaneCoords').classList.toggle('show', planeMode && planeSelectedAxes.length===1);
+  // Ebenen-Liste
+  const plL=document.getElementById('fpPlanesList');
+  plL.innerHTML='';
+  if(createdPlanes.length===0){
+    plL.innerHTML='<div class="axEmpty">"⊕ Neu" aktivieren, dann 2 Achsen wählen</div>';
+  } else {
+    createdPlanes.forEach((p,i)=>{
+      const it=document.createElement('div'); it.className='planeItem';
+      const sw=document.createElement('div'); sw.className='plSw';
+      const [r,g,b]=p.color;
+      sw.style.background=`rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},0.5)`;
+      const nm=document.createElement('span'); nm.className='plName';
+      nm.textContent=p.name; nm.title=`normal=(${p.normal.map(x=>x.toFixed(2)).join(',')})`;
+      const del=document.createElement('button'); del.className='plDel'; del.textContent='×'; del.title='Ebene löschen';
+      del.addEventListener('click',(e)=>{ e.stopPropagation(); deletePlane(i); });
+      it.appendChild(sw); it.appendChild(nm); it.appendChild(del);
+      plL.appendChild(it);
+    });
+  }
+}
+
+var planeMode=false;
+var planeSelectedAxes=[];
+function togglePlaneMode(on){
+  planeMode = on!==undefined ? on : !planeMode;
+  if(!planeMode){ planeSelectedAxes=[]; }
+  document.getElementById('planeModeBtn').classList.toggle('active', planeMode);
+  renderPartsList();
+}
+function planeSelectAxis(idx){
+  if(!planeMode) return;
+  const pos=planeSelectedAxes.indexOf(idx);
+  if(pos>=0){ planeSelectedAxes.splice(pos,1); }
+  else {
+    planeSelectedAxes.push(idx);
+    if(planeSelectedAxes.length===2){
+      createPlaneFromAxes(createdAxes[planeSelectedAxes[0]], createdAxes[planeSelectedAxes[1]]);
+      togglePlaneMode(false);
+      return;
+    }
+  }
+  renderPartsList();
+}
+function planeSelectCoord(coordIdx){
+  if(!planeMode || planeSelectedAxes.length!==1) return;
+  createPlaneFromAxisAndCoord(planeSelectedAxes[0], coordIdx);
+  togglePlaneMode(false);
 }
 
 // Zylinder-Erkennung + Achsen-Fit: Dreiecksnormalen sammeln, Kovarianz bilden,
@@ -1312,6 +1527,10 @@ function toggleAxisMode(on){
   if(!axisMode){ hoverBodyIdx=-1; setHoverRegion(null); }
 }
 document.getElementById('axisModeBtn').addEventListener('click',()=>toggleAxisMode());
+document.getElementById('planeModeBtn').addEventListener('click',()=>togglePlaneMode());
+document.querySelectorAll('#fpPlaneCoords button').forEach(b=>{
+  b.addEventListener('click',()=>planeSelectCoord(+b.dataset.co));
+});
 
 // Im Achsen-Modus: die Fläche (glattes Dreiecks-Gebiet) unter der Maus finden
 // und nur diese hervorheben. Schwellenwert 0.85 ≈ 31° Knick → alles darunter
@@ -1480,6 +1699,7 @@ function createAxisForRegion(triSet){
   createdAxes.push(a);
   rebuildAxisBuffer();
   renderPartsList();
+  if(window.__saveSceneObjects) window.__saveSceneObjects();
   return a;
 }
 // ESC beendet Axis-Modus
@@ -1529,8 +1749,18 @@ window.createAxisForBody=createAxisForBody;
 window.createAxisForRegion=createAxisForRegion;
 window.deleteAxis=deleteAxis;
 window.createdAxes=createdAxes;
+window.rebuildAxisBuffer=rebuildAxisBuffer;
+window.rebuildPlaneBuffer=rebuildPlaneBuffer;
+window.renderPartsList=renderPartsList;
 window.toggleAxisMode=toggleAxisMode;
 window.floodSmoothRegion=floodSmoothRegion;
+window.createPlaneFromAxes=createPlaneFromAxes;
+window.createPlaneFromAxisAndCoord=createPlaneFromAxisAndCoord;
+window.deletePlane=deletePlane;
+window.createdPlanes=createdPlanes;
+window.togglePlaneMode=togglePlaneMode;
+window.planeSelectAxis=planeSelectAxis;
+window.planeSelectCoord=planeSelectCoord;
 
 // Welches Part enthält ein bestimmtes Dreieck? Lineare Suche, i.d.R. wenige Teile.
 function partFromTri(triIdx){
@@ -2104,7 +2334,21 @@ function render(){
   gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
   gl.disable(gl.CULL_FACE);
 
-  // Pass 2.3: Benutzererzeugte Achsen als Linien durch die Szene (immer sichtbar)
+  // Pass 2.3a: Benutzererzeugte Ebenen (halbtransparente Quads)
+  if(createdPlanes.length>0 && planeVao && planeIdxCount>0){
+    gl.useProgram(pSphere);
+    gl.bindVertexArray(planeVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    for(let i=0;i<createdPlanes.length;i++){
+      const p=createdPlanes[i];
+      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),p.color);
+      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, i*12);
+    }
+    gl.depthMask(true);gl.disable(gl.BLEND);
+  }
+  // Pass 2.3b: Benutzererzeugte Achsen als Linien (immer sichtbar)
   if(createdAxes.length>0 && axisVao){
     gl.useProgram(pLine);
     gl.bindVertexArray(axisVao);
