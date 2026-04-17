@@ -2419,18 +2419,18 @@ function render(){
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
 
-  // Pass 1: Stencil zählen (keine Farb-/Tiefenschreibung)
+  // Pass 1: Stencil über Parität (INVERT) — robust für komplexe Meshes mit
+  // internen Flächen. Jedes vom Ray getroffene Dreieck togglet das Stencil-Bit.
+  // Ungerade Anzahl = innerhalb Cross-Section, gerade = aussen.
   gl.enable(gl.STENCIL_TEST);gl.stencilMask(0xff);
   gl.colorMask(false,false,false,false);gl.depthMask(false);
+  gl.disable(gl.CULL_FACE);
+  gl.stencilFunc(gl.ALWAYS,0,0xff);
+  gl.stencilOp(gl.KEEP,gl.KEEP,gl.INVERT);
   gl.useProgram(pSten);gl.bindVertexArray(meshVao);
   gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
   gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.FRONT);gl.stencilFunc(gl.ALWAYS,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.INCR_WRAP);
   gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
-  gl.cullFace(gl.BACK);gl.stencilOp(gl.KEEP,gl.KEEP,gl.DECR_WRAP);
-  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
-  gl.disable(gl.CULL_FACE);
   gl.colorMask(true,true,true,true);gl.depthMask(true);
   gl.disable(gl.STENCIL_TEST);
 
@@ -2531,38 +2531,35 @@ function render(){
     }
   }
 
-  // Pass 5: Arcball-Kugel — in KAMERA-Raum gerendert, damit die Rotation (arcQ)
-  // visuell sichtbar ist. Modellmatrix = translate(target_cam) * rot(arcQ) * scale.
-  // MVP = proj * modellmatrix (kein view, da bereits in Kamera-Raum).
-  if(sphereVisible){
+  // Pass 5: Arcball-Kugel + Ring-Kontur — im Kamera-Raum.
+  // sphereVisible → blendet Drahtkugel aus, Ring bleibt an Rotation gekoppelt.
+  if(sphereVisible || arcOn){
     const r=q2m(arcQ);
     const s=oSize*_sphereScale;
-    // target in Kamera-Raum: view * [target,1] — view enthält auch Translation (Kamerapos.)
     const tcx=view[0]*target[0]+view[4]*target[1]+view[8]*target[2]+view[12];
     const tcy=view[1]*target[0]+view[5]*target[1]+view[9]*target[2]+view[13];
     const tcz=view[2]*target[0]+view[6]*target[1]+view[10]*target[2]+view[14];
-    // rot(arcQ)^T für die Kugel verwenden, damit sie in dieselbe Richtung rotiert
-    // wie das Modell (beides folgt nun der Maus beim Ziehen).
-    const sw=new Float32Array(16);
-    sw[0]=r[0]*s;sw[1]=r[4]*s;sw[2]=r[8]*s;sw[3]=0;
-    sw[4]=r[1]*s;sw[5]=r[5]*s;sw[6]=r[9]*s;sw[7]=0;
-    sw[8]=r[2]*s;sw[9]=r[6]*s;sw[10]=r[10]*s;sw[11]=0;
-    sw[12]=tcx;sw[13]=tcy;sw[14]=tcz;sw[15]=1;
-    const smvp=mul(proj,sw);
 
     gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
     gl.useProgram(pSphere);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,smvp);
 
-    // Nur Wireframe — keine Flächenfüllung, reiner "Drahtmodell-Globus"
-    gl.bindVertexArray(sphereVao);
-    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.55]);
-    gl.drawArrays(gl.LINES,0,sphereVertCount);
+    if(sphereVisible){
+      // Drahtmodell-Kugel mit Rotation
+      const sw=new Float32Array(16);
+      sw[0]=r[0]*s;sw[1]=r[4]*s;sw[2]=r[8]*s;sw[3]=0;
+      sw[4]=r[1]*s;sw[5]=r[5]*s;sw[6]=r[9]*s;sw[7]=0;
+      sw[8]=r[2]*s;sw[9]=r[6]*s;sw[10]=r[10]*s;sw[11]=0;
+      sw[12]=tcx;sw[13]=tcy;sw[14]=tcz;sw[15]=1;
+      const smvp=mul(proj,sw);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,smvp);
+      gl.bindVertexArray(sphereVao);
+      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.55]);
+      gl.drawArrays(gl.LINES,0,sphereVertCount);
+    }
 
-    // Stationärer Ring-Kontur: rotiert NICHT mit arcQ (immer flacher Kreis am Bildschirm).
-    // NUR während aktivem Rotations-Drag (middle button) sichtbar — nicht bei Pan/Zoom/Idle.
     if(arcOn){
+      // Ring zeigt aktive Rotation an — unabhängig vom Kugel-Toggle
       const sw2=new Float32Array(16);
       sw2[0]=s; sw2[5]=s; sw2[10]=s;
       sw2[12]=tcx; sw2[13]=tcy; sw2[14]=tcz; sw2[15]=1;
