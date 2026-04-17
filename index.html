@@ -668,6 +668,32 @@ const sphereBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sphereBuf);
 gl.bufferData(gl.ARRAY_BUFFER,sphereVerts,gl.STATIC_DRAW);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 const sphereVertCount=sphereVerts.length/3;
+
+// Einheitskugel als Dreiecksnetz (UV-Kugel, 2 Dreiecke pro Quad) — für halbtransparente Füllung
+function genSphereTriangles(nLat,nLon){
+  const v=[];
+  for(let i=0;i<nLat;i++){
+    const phi1=Math.PI*i/nLat-Math.PI/2, phi2=Math.PI*(i+1)/nLat-Math.PI/2;
+    const r1=Math.cos(phi1), y1=Math.sin(phi1);
+    const r2=Math.cos(phi2), y2=Math.sin(phi2);
+    for(let j=0;j<nLon;j++){
+      const t1=j/nLon*Math.PI*2, t2=(j+1)/nLon*Math.PI*2;
+      const p11=[r1*Math.cos(t1),y1,r1*Math.sin(t1)];
+      const p12=[r1*Math.cos(t2),y1,r1*Math.sin(t2)];
+      const p21=[r2*Math.cos(t1),y2,r2*Math.sin(t1)];
+      const p22=[r2*Math.cos(t2),y2,r2*Math.sin(t2)];
+      v.push(...p11,...p21,...p22);
+      v.push(...p11,...p22,...p12);
+    }
+  }
+  return new Float32Array(v);
+}
+const sphereTriVerts=genSphereTriangles(14,28);
+const sphereTriVao=gl.createVertexArray();gl.bindVertexArray(sphereTriVao);
+const sphereTriBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sphereTriBuf);
+gl.bufferData(gl.ARRAY_BUFFER,sphereTriVerts,gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+const sphereTriCount=sphereTriVerts.length/3;
 var _sphereScale=0.54; // relativ zur Kamera-Orthogrösse — per Slider änderbar
 
 /* ═══ Matrix-Mathematik ═══ */
@@ -1048,23 +1074,38 @@ function render(){
     gl.depthFunc(gl.ALWAYS);gl.drawArrays(gl.LINES,0,cCount);gl.depthFunc(gl.LEQUAL);
   }
 
-  // Pass 5: Arcball-Kugel (wireframe, um den Modellmittelpunkt, rotiert mit arcQ)
+  // Pass 5: Arcball-Kugel — in KAMERA-Raum gerendert, damit die Rotation (arcQ)
+  // visuell sichtbar ist. Modellmatrix = translate(target_cam) * rot(arcQ) * scale.
+  // MVP = proj * modellmatrix (kein view, da bereits in Kamera-Raum).
   {
     const r=q2m(arcQ);
-    // Weltmatrix der Kugel: Skalierung * Rotation (arcQ) * Translation (target)
     const s=oSize*_sphereScale;
+    // target in Kamera-Raum: view * [target,1] — view enthält auch Translation (Kamerapos.)
+    const tcx=view[0]*target[0]+view[4]*target[1]+view[8]*target[2]+view[12];
+    const tcy=view[1]*target[0]+view[5]*target[1]+view[9]*target[2]+view[13];
+    const tcz=view[2]*target[0]+view[6]*target[1]+view[10]*target[2]+view[14];
     const sw=new Float32Array(16);
     sw[0]=r[0]*s;sw[1]=r[1]*s;sw[2]=r[2]*s;sw[3]=0;
     sw[4]=r[4]*s;sw[5]=r[5]*s;sw[6]=r[6]*s;sw[7]=0;
     sw[8]=r[8]*s;sw[9]=r[9]*s;sw[10]=r[10]*s;sw[11]=0;
-    sw[12]=target[0];sw[13]=target[1];sw[14]=target[2];sw[15]=1;
-    const smvp=mul(vp,sw);
-    gl.useProgram(pSphere);gl.bindVertexArray(sphereVao);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,smvp);
-    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.28]);
+    sw[12]=tcx;sw[13]=tcy;sw[14]=tcz;sw[15]=1;
+    const smvp=mul(proj,sw);
+
     gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(pSphere);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,smvp);
+
+    // Halbtransparente Dreiecks-Füllung
+    gl.bindVertexArray(sphereTriVao);
+    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.08]);
+    gl.drawArrays(gl.TRIANGLES,0,sphereTriCount);
+
+    // Wireframe-Overlay für Lesbarkeit der Rotation
+    gl.bindVertexArray(sphereVao);
+    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.45]);
     gl.drawArrays(gl.LINES,0,sphereVertCount);
+
     gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
   }
 

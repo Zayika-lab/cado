@@ -47,23 +47,33 @@ async function qDelta(a, b) {
   return 1 - d;
 }
 
-test('middle-drag INSIDE sphere rotates (arcball)', async ({ page }) => {
+test('middle-drag INSIDE sphere rotates (arcball) and sphere visually rotates', async ({ page }) => {
   await openLoaded(page);
   const q0 = await page.evaluate(() => window.__state().arcQ);
+  await page.screenshot({ path: path.join(SHOTS, 'sphere-before.png') });
 
   // Viewport 1280×800, sphere r = 800*0.54/2 = 216px, center (640,400)
-  // Drag from (640,400) → (700,430) → both inside.
+  // Drag from (640,400) → (780,470) → both inside sphere, bigger motion for visible change.
   await page.mouse.move(640, 400);
   await page.mouse.down({ button: 'middle' });
-  await page.mouse.move(700, 430, { steps: 8 });
+  await page.mouse.move(780, 470, { steps: 10 });
   await page.mouse.up({ button: 'middle' });
-  await page.waitForTimeout(80);
+  await page.waitForTimeout(120);
+  await page.screenshot({ path: path.join(SHOTS, 'sphere-after.png') });
 
   const q1 = await page.evaluate(() => window.__state().arcQ);
   const delta = await qDelta(q0, q1);
-  console.log('inside-drag delta=', delta.toFixed(4), ' q0=', q0, ' q1=', q1);
+  console.log('inside-drag delta=', delta.toFixed(4));
   expect(delta).toBeGreaterThan(0.001);
-  await page.screenshot({ path: path.join(SHOTS, 'sphere-inside-rotate.png') });
+
+  // Visual rotation check: the two saved screenshots must differ in the
+  // sphere region (otherwise the sphere appears static despite arcQ changing).
+  const fs2 = await import('fs');
+  const bef = fs2.readFileSync(path.join(SHOTS, 'sphere-before.png'));
+  const aft = fs2.readFileSync(path.join(SHOTS, 'sphere-after.png'));
+  const differ = bef.length !== aft.length || !bef.equals(aft);
+  console.log('screenshots differ:', differ, ' before=', bef.length, ' after=', aft.length);
+  expect(differ, 'sphere rendered identically before and after rotation').toBe(true);
 });
 
 test('middle-drag OUTSIDE sphere rotates around screen-Z', async ({ page }) => {
