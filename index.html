@@ -932,16 +932,23 @@ var panOn=false, pmx=0, pmy=0, pt0=[0,0,0];
 
 cv.onmousedown=e=>{
   e.preventDefault();
-  cancelNavAnim(); // Benutzeraktion bricht laufende Nav-Animation ab
   if(e.button===1){
     arcBegin(e.clientX,e.clientY);
     __midDown=[e.clientX,e.clientY]; __midMoved=false;
-  } else if(e.button===0){ panOn=true; pmx=e.clientX; pmy=e.clientY; pt0=[...target]; }
+  } else if(e.button===0){
+    // Pan startet sofort mit Drag — Nav-Animation abbrechen, sonst nicht
+    cancelNavAnim();
+    panOn=true; pmx=e.clientX; pmy=e.clientY; pt0=[...target];
+  }
 };
 window.onmousemove=e=>{
   if(arcOn){
+    if(__midDown && Math.hypot(e.clientX-__midDown[0],e.clientY-__midDown[1])>3 && !__midMoved){
+      // Erster Drag-Schritt der mittleren Taste → von Klick zu Drag umschalten,
+      // laufende Nav-Animation (falls noch aktiv) unterbrechen.
+      __midMoved=true; cancelNavAnim();
+    }
     arcMove(e.clientX,e.clientY);
-    if(__midDown && Math.hypot(e.clientX-__midDown[0],e.clientY-__midDown[1])>3) __midMoved=true;
   }
   if(panOn){
     const s=oSize*2/cv.clientHeight;
