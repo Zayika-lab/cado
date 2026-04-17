@@ -23,12 +23,56 @@ canvas{display:block;width:100%;height:100%}
 .ab{padding:3px 9px;font-size:10px;border:1px solid rgba(74,142,255,0.25);border-radius:4px;
   background:transparent;color:#5a5a7a;cursor:pointer;font-family:monospace}
 .ab.on{background:rgba(74,142,255,0.2);color:#4a8eff;border-color:#4a8eff}
+
+/* Anmeldung-Overlay */
+#auth{position:fixed;inset:0;z-index:100;background:linear-gradient(135deg,#1b1e24 0%,#0f1116 100%);
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:24px}
+#auth.hide{display:none}
+#auth h1{font-size:28px;font-weight:300;color:#4a8eff;letter-spacing:2px}
+#auth p{color:#7a7a9a;font-size:13px;max-width:340px;text-align:center;line-height:1.6}
+#gbtn{display:flex;align-items:center;gap:12px;padding:12px 24px;background:#fff;color:#1a1a2e;
+  border:none;border-radius:8px;font:500 14px system-ui;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.4);
+  transition:transform .15s}
+#gbtn:hover{transform:translateY(-1px)}
+#gbtn:disabled{opacity:0.5;cursor:wait}
+#gbtn svg{width:18px;height:18px}
+#authErr{color:#ff6b6b;font-size:12px;min-height:16px}
+
+/* Benutzerleiste oben rechts */
+#userBar{position:fixed;top:10px;right:10px;z-index:20;display:none;align-items:center;gap:10px;
+  background:rgba(20,22,28,0.9);border:1px solid rgba(74,142,255,0.25);border-radius:8px;
+  padding:6px 10px;font:12px system-ui;backdrop-filter:blur(8px)}
+#userBar.show{display:flex}
+#userBar img{width:24px;height:24px;border-radius:50%}
+#userBar span{color:#c8ccd4;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#logoutBtn{background:transparent;border:1px solid rgba(255,107,107,0.4);color:#ff6b6b;
+  border-radius:5px;padding:4px 10px;font:11px system-ui;cursor:pointer}
+#logoutBtn:hover{background:rgba(255,107,107,0.1)}
 </style></head><body>
+
+<!-- Anmeldebildschirm (zuerst sichtbar) -->
+<div id="auth">
+  <h1>CADO</h1>
+  <p>Melde dich mit Google an, um GLB-Bauteile zu&nbsp;öffnen und anzuzeigen.</p>
+  <button id="gbtn" disabled>
+    <svg viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.7-2 5-4.3 6.6v5.5h7c4.1-3.8 6.6-9.4 6.6-16.1z"/><path fill="#34A853" d="M24 46c5.8 0 10.7-1.9 14.3-5.2l-7-5.4c-1.9 1.3-4.4 2.1-7.3 2.1-5.6 0-10.4-3.8-12.1-8.9H4.7v5.6C8.3 41.1 15.6 46 24 46z"/><path fill="#FBBC05" d="M11.9 28.6c-.4-1.3-.7-2.7-.7-4.1s.2-2.8.7-4.1v-5.6H4.7C3.2 17.9 2.4 20.8 2.4 24s.8 6.1 2.3 9.2l7.2-5.6z"/><path fill="#EA4335" d="M24 10.6c3.2 0 6 1.1 8.2 3.2l6.1-6.1C34.7 4.1 29.8 2 24 2 15.6 2 8.3 6.9 4.7 13.9l7.2 5.6c1.7-5.1 6.5-8.9 12.1-8.9z"/></svg>
+    Mit Google anmelden
+  </button>
+  <div id="authErr"></div>
+</div>
+
+<!-- Benutzerinfo + Abmelden -->
+<div id="userBar">
+  <img id="uAva" alt="">
+  <span id="uName"></span>
+  <button id="logoutBtn">Abmelden</button>
+</div>
+
 <canvas id="c"></canvas>
 <div id="drop" onclick="document.getElementById('fi').click()">
   <div style="font-size:28px;margin-bottom:8px;opacity:0.5">&#128193;</div>
-  STP / GLB / STL<br>hier ablegen oder klicken<br>
-  <input type="file" id="fi" accept=".glb,.stp,.step,.stl" style="display:none">
+  Nur GLB-Dateien<br>hier ablegen oder klicken<br>
+  <input type="file" id="fi" accept=".glb" style="display:none">
 </div>
 <div id="info"></div>
 <div id="ctrl">
@@ -40,11 +84,112 @@ canvas{display:block;width:100%;height:100%}
     <button class="ab on" data-a="2">Z</button>
   </div>
 </div>
-<script>
-// No embedded data
+
+<!-- Firebase-Initialisierung (Modulskript, wird deferred geladen) -->
+<script type="module">
+  // Firebase SDK-Module direkt vom Google-CDN laden
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
+    from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+  import { getFirestore, collection, addDoc, serverTimestamp }
+    from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+
+  // Firebase-Konfiguration für das Projekt cado-aae0e
+  const firebaseConfig = {
+    apiKey: "AIzaSyDsE6QXWxUX1aHOvl9sO8FhBcYnD7ionW0",
+    authDomain: "cado-aae0e.firebaseapp.com",
+    projectId: "cado-aae0e",
+    storageBucket: "cado-aae0e.firebasestorage.app",
+    messagingSenderId: "797607834316",
+    appId: "1:797607834316:web:2096afd1a01b83aa244869"
+  };
+
+  // App-, Auth- und Firestore-Instanzen erzeugen
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const provider = new GoogleAuthProvider();
+
+  // DOM-Referenzen für die Anmelde-UI
+  const authEl = document.getElementById('auth');
+  const gbtn = document.getElementById('gbtn');
+  const authErr = document.getElementById('authErr');
+  const userBar = document.getElementById('userBar');
+  const uAva = document.getElementById('uAva');
+  const uName = document.getElementById('uName');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  // Anmelde-Button per Klick → Google-Popup öffnen
+  gbtn.addEventListener('click', async () => {
+    authErr.textContent = '';
+    gbtn.disabled = true;
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (e) {
+      // Fehler bei Anmeldung anzeigen (z. B. Popup blockiert, Domain nicht autorisiert)
+      authErr.textContent = 'Anmeldung fehlgeschlagen: ' + (e.code || e.message);
+      gbtn.disabled = false;
+    }
+  });
+
+  // Abmelde-Button
+  logoutBtn.addEventListener('click', () => signOut(auth));
+
+  // Aktueller Benutzer (wird von onAuthStateChanged gesetzt)
+  let currentUser = null;
+
+  // Reagiert auf Änderungen des Anmeldezustands
+  onAuthStateChanged(auth, (user) => {
+    currentUser = user;
+    if (user) {
+      // Angemeldet: Anmeldung ausblenden, Benutzerleiste zeigen
+      authEl.classList.add('hide');
+      userBar.classList.add('show');
+      uAva.src = user.photoURL || '';
+      uName.textContent = user.displayName || user.email || 'Benutzer';
+      gbtn.disabled = false;
+    } else {
+      // Abgemeldet: Anmeldebildschirm wieder anzeigen, UI zurücksetzen
+      authEl.classList.remove('hide');
+      userBar.classList.remove('show');
+      gbtn.disabled = false;
+      // Viewer-UI verstecken
+      document.getElementById('drop').classList.remove('hide');
+      document.getElementById('ctrl').style.display = 'none';
+      const lb = document.getElementById('loadBtn');
+      if (lb) lb.remove();
+      if (window.__resetViewer) window.__resetViewer();
+    }
+  });
+
+  // Globale Hilfsfunktion: speichert GLB-Metadaten nach erfolgreichem Laden in Firestore
+  window.__logGLB = async (filename, vertCount, triCount, sizeBytes) => {
+    if (!currentUser) return;
+    try {
+      await addDoc(collection(db, 'glb_loads'), {
+        uid: currentUser.uid,
+        email: currentUser.email || null,
+        displayName: currentUser.displayName || null,
+        filename,
+        vertCount,
+        triCount,
+        sizeBytes,
+        createdAt: serverTimestamp()
+      });
+    } catch (e) {
+      // Fehler nur in Konsole – kein harter Fehler für den Nutzer
+      console.warn('Firestore-Log fehlgeschlagen:', e);
+    }
+  };
+
+  // Getter für den Anmeldezustand (vom Viewer genutzt, um Uploads zu gaten)
+  window.__isAuthed = () => !!currentUser;
 </script>
+
 <script>
 "use strict";
+
+/* ═══ WebGL-Kontext und Canvas vorbereiten ═══ */
 const cv=document.getElementById('c');
 const gl=cv.getContext('webgl2',{stencil:true,antialias:true});
 const info=document.getElementById('info');
@@ -53,10 +198,11 @@ if(!gl){info.textContent='WebGL2 not available';throw'no gl';}
 function resize(){const d=window.devicePixelRatio||1;cv.width=cv.clientWidth*d;cv.height=cv.clientHeight*d;gl.viewport(0,0,cv.width,cv.height);}
 resize();window.addEventListener('resize',resize);
 
-/* ═══ Shaders ═══ */
+/* ═══ Shader-Hilfsfunktionen ═══ */
 function mkS(t,s){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(sh));return sh;}
 function mkP(v,f){const p=gl.createProgram();gl.attachShader(p,mkS(gl.VERTEX_SHADER,v));gl.attachShader(p,mkS(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);return p;}
 
+/* Hauptprogramm: beleuchtetes Modell mit Clipping */
 const pMain=mkP(`#version 300 es
 layout(location=0) in vec3 aP;layout(location=1) in vec3 aN;
 uniform mat4 uMVP;out vec3 vN,vW;
@@ -68,6 +214,7 @@ void main(){if(dot(vec4(vW,1),uClip)<0.)discard;
   float d=max(dot(n,normalize(vec3(1,.8,.5))),0.)*.55+max(dot(n,normalize(vec3(-.5,-.3,-.5))),0.)*.2;
   f=vec4(uC*(.32+d),1);}`);
 
+/* Stencil-Programm: nur Schablone schreiben, kein Farbausgang */
 const pSten=mkP(`#version 300 es
 layout(location=0) in vec3 aP;uniform mat4 uMVP;out vec3 vW;
 void main(){vW=aP;gl_Position=uMVP*vec4(aP,1);}
@@ -75,22 +222,25 @@ void main(){vW=aP;gl_Position=uMVP*vec4(aP,1);}
 precision highp float;uniform vec4 uClip;in vec3 vW;out vec4 f;
 void main(){if(dot(vec4(vW,1),uClip)<0.)discard;f=vec4(0);}`);
 
+/* Cap-Programm: füllt die Schnittfläche */
 const pCap=mkP(`#version 300 es
 layout(location=0) in vec3 aP;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec4(aP,1);}
 `,`#version 300 es
 precision highp float;uniform vec3 uCC;out vec4 f;void main(){f=vec4(uCC,1);}`);
 
+/* Linienprogramm: Schnittkonturen */
 const pLine=mkP(`#version 300 es
 layout(location=0) in vec3 aP;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec4(aP,1);}
 `,`#version 300 es
 precision highp float;uniform vec4 uLC;out vec4 f;void main(){f=uLC;}`);
 
-/* ═══ Mesh state ═══ */
+/* ═══ Mesh-Zustand ═══ */
 var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
 
 function uploadMesh(positions,normals,indices){
   MV=positions;MN=normals;MI=indices;
   const nv=MV.length/3;
+  // Verschränktes Layout (Position + Normale) für den Vertex-Buffer
   const inter=new Float32Array(nv*6);
   for(let i=0;i<nv;i++){
     inter[i*6]=MV[i*3];inter[i*6+1]=MV[i*3+1];inter[i*6+2]=MV[i*3+2];
@@ -104,7 +254,7 @@ function uploadMesh(positions,normals,indices){
   meshIB=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,meshIB);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,MI,gl.STATIC_DRAW);
 
-  // Compute bbox
+  // Bounding-Box berechnen
   let xn=1e9,yn=1e9,zn=1e9,xx=-1e9,yx=-1e9,zx=-1e9;
   for(let i=0;i<nv;i++){
     const x=MV[i*3],y=MV[i*3+1],z=MV[i*3+2];
@@ -128,19 +278,28 @@ function uploadMesh(positions,normals,indices){
   }
 }
 
-/* ═══ Cap plane VAO ═══ */
+/* Viewer-Zustand zurücksetzen (bei Abmeldung aufgerufen) */
+window.__resetViewer=function(){
+  meshLoaded=false;MV=MN=MI=null;
+  if(meshVao){gl.deleteVertexArray(meshVao);meshVao=null;}
+  gl.clearColor(0.106,0.118,0.141,1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
+  info.textContent='';
+};
+
+/* ═══ VAO für die Schnittebene ═══ */
 const capVao=gl.createVertexArray();gl.bindVertexArray(capVao);
 const cb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,cb);
 gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-9999,-9999,0,9999,-9999,0,-9999,9999,0,9999,9999,0]),gl.STATIC_DRAW);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 
-/* ═══ Contour VAO ═══ */
+/* ═══ VAO für Schnittkonturen ═══ */
 const cVao=gl.createVertexArray();gl.bindVertexArray(cVao);
 const cBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,cBuf);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 var cCount=0;
 
-/* ═══ Math ═══ */
+/* ═══ Matrix-Mathematik ═══ */
 const M4=()=>new Float32Array(16);
 function I4(m){m.fill(0);m[0]=m[5]=m[10]=m[15]=1;return m;}
 function ortho(l,r,b,t,n,f){const m=M4();m[0]=2/(r-l);m[5]=2/(t-b);m[10]=-2/(f-n);m[12]=-(r+l)/(r-l);m[13]=-(t+b)/(t-b);m[14]=-(f+n)/(f-n);m[15]=1;return m;}
@@ -151,7 +310,7 @@ function scl(s){const m=M4();I4(m);m[0]=m[5]=m[10]=s;return m;}
 function rotX(a){const m=M4();I4(m);m[5]=Math.cos(a);m[6]=Math.sin(a);m[9]=-Math.sin(a);m[10]=Math.cos(a);return m;}
 function rotY(a){const m=M4();I4(m);m[0]=Math.cos(a);m[2]=-Math.sin(a);m[8]=Math.sin(a);m[10]=Math.cos(a);return m;}
 
-/* ═══ State ═══ */
+/* ═══ Kamera-Zustand (Arcball-Quaternion) ═══ */
 var arcQ=[0,0,0,1];
 function qm(a,b){return[a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0],a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2]];}
 function qn(q){const l=Math.sqrt(q[0]**2+q[1]**2+q[2]**2+q[3]**2);return q.map(x=>x/l);}
@@ -164,6 +323,7 @@ function capMat(){const v=clipVal(),e=-maxDim*0.0003;
   if(clipAxis===1)return mul(trans(0,v+e,0),rotX(-Math.PI/2));
   return trans(0,0,v+e);}
 
+/* Schnittkontur neu berechnen, wenn sich Achse oder Position ändert */
 function computeContour(){
   if(!meshLoaded)return;
   const val=clipVal(),ax=clipAxis,segs=[];
@@ -182,22 +342,22 @@ function computeContour(){
 var lastCA=-1,lastCT=-1;
 function updateCut(){if(clipAxis!==lastCA||clipT!==lastCT){lastCA=clipAxis;lastCT=clipT;computeContour();}}
 
-/* ═══ Input ═══ */
+/* ═══ Maus-Eingabe (Rotation, Pan, Zoom) ═══ */
 var drag=false,dv0,dq0,pan=false,pmx,pmy,pt0;
 function arcP(mx,my){const r=Math.min(cv.clientWidth,cv.clientHeight)*0.4;const x=(mx-cv.clientWidth/2)/r,y=-(my-cv.clientHeight/2)/r,l2=x*x+y*y;if(l2<=1)return[x,y,Math.sqrt(1-l2)];const l=Math.sqrt(l2);return[x/l,y/l,0];}
 function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
 function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
 cv.onmousedown=e=>{e.preventDefault();if(e.button===0){drag=true;dv0=arcP(e.clientX,e.clientY);dq0=[...arcQ];}else{pan=true;pmx=e.clientX;pmy=e.clientY;pt0=[...target];}};
-onmousemove=e=>{if(drag){const v=arcP(e.clientX,e.clientY);const cr=cross(dv0,v);const d=dot3(dv0,v);arcQ=qn(qm([cr[0],cr[1],cr[2],1+d],dq0));}
+window.onmousemove=e=>{if(drag){const v=arcP(e.clientX,e.clientY);const cr=cross(dv0,v);const d=dot3(dv0,v);arcQ=qn(qm([cr[0],cr[1],cr[2],1+d],dq0));}
   if(pan){const s=oSize*2/cv.clientHeight;const rm=q2m(arcQ);const dx=(e.clientX-pmx)*s,dy=(e.clientY-pmy)*s;
     target=[pt0[0]-rm[0]*dx+rm[4]*dy,pt0[1]-rm[1]*dx+rm[5]*dy,pt0[2]-rm[2]*dx+rm[6]*dy];}};
-onmouseup=()=>{drag=false;pan=false;};
+window.onmouseup=()=>{drag=false;pan=false;};
 cv.oncontextmenu=e=>e.preventDefault();
 cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0.001,Math.min(100,oSize));};
 document.getElementById('cutR').oninput=e=>{clipT=+e.target.value;document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';lastCA=-1;};
 document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));b.classList.add('on');clipAxis=+b.dataset.a;lastCA=-1;});
 
-/* ═══ GLB Loader ═══ */
+/* ═══ GLB-Loader (Binary glTF 2.0) ═══ */
 function parseGLB(buf){
   const dv=new DataView(buf);
   const jsonLen=dv.getUint32(12,true);
@@ -206,6 +366,7 @@ function parseGLB(buf){
   const bin=new Uint8Array(buf,binOff);
   const bvs=json.bufferViews,accs=json.accessors;
 
+  // Accessor auslesen und ggf. destrided kopieren
   function readAcc(ai){
     const a=accs[ai],bv=bvs[a.bufferView];
     const bvo=bv.byteOffset||0,ao=a.byteOffset||0,stride=bv.byteStride||0;
@@ -225,7 +386,7 @@ function parseGLB(buf){
     return out;
   }
 
-  // Get node transform
+  // Knoten-Transformation (nur Skalierung wird hier berücksichtigt)
   let scale=1;
   if(json.nodes&&json.nodes[0]&&json.nodes[0].matrix)scale=json.nodes[0].matrix[0];
   else if(json.nodes&&json.nodes[0]&&json.nodes[0].scale)scale=json.nodes[0].scale[0];
@@ -239,7 +400,7 @@ function parseGLB(buf){
       const pos=readAcc(posAcc);
       const nor=norAcc!==undefined?readAcc(norAcc):null;
       const nv=accs[posAcc].count;
-      // Apply scale
+      // Skalierung auf Positionen anwenden
       const sp=new Float32Array(nv*3);
       for(let i=0;i<nv*3;i++)sp[i]=pos[i]*scale;
       allP.push(sp);
@@ -255,7 +416,7 @@ function parseGLB(buf){
     }
   }
   const P=concat32(allP),N=concat32(allN),I=concatU32(allI);
-  // Compute normals if missing
+  // Fehlende Normalen aus Dreiecken berechnen
   for(let i=0;i<I.length;i+=3){
     const i0=I[i],i1=I[i+1],i2=I[i+2];
     const ax=P[i1*3]-P[i0*3],ay=P[i1*3+1]-P[i0*3+1],az=P[i1*3+2]-P[i0*3+2];
@@ -271,84 +432,37 @@ function parseGLB(buf){
 function concat32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Float32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
 function concatU32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Uint32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
 
-/* ═══ File handling ═══ */
+/* ═══ Datei-Drop und Datei-Picker ═══ */
 const dropEl=document.getElementById('drop');
 dropEl.addEventListener('dragover',e=>{e.preventDefault();});
 dropEl.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer.files[0])loadFile(e.dataTransfer.files[0]);});
 document.getElementById('fi').onchange=e=>{if(e.target.files[0])loadFile(e.target.files[0]);};
 
-var occtReady=false,occtMod=null;
-async function loadOCCT(){
-  if(occtReady)return occtMod;
-  info.textContent='STEP-Kernel wird geladen (~15 MB)...';
-  const urls=[
-    {js:'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js',b:'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/'},
-    {js:'https://unpkg.com/occt-import-js@0.0.23/dist/occt-import-js.js',b:'https://unpkg.com/occt-import-js@0.0.23/dist/'},
-  ];
-  for(const u of urls){
-    try{
-      await new Promise((r,j)=>{const s=document.createElement('script');s.src=u.js;s.onload=r;s.onerror=j;document.head.appendChild(s);});
-      occtMod=await occtimportjs({locateFile:f=>u.b+f});
-      occtReady=true;return occtMod;
-    }catch(e){console.warn(e);}
-  }
-  throw new Error('STEP-Kernel nicht ladbar. Bitte Internet prüfen.');
-}
-
-function parseSTP(buf){
-  const r=occtMod.ReadStepFile(new Uint8Array(buf),{linearDeflection:0.1,angularDeflection:0.5});
-  if(!r||!r.success||!r.meshes||!r.meshes.length)throw new Error('STEP nicht lesbar');
-  const aP=[],aN=[],aI=[];let vo=0;
-  for(const m of r.meshes){
-    const pa=m.attributes?.position?.array;if(!pa||!pa.length)continue;
-    const nv=pa.length/3;
-    const p=new Float32Array(pa.length);for(let i=0;i<pa.length;i++)p[i]=pa[i];aP.push(p);
-    if(m.attributes?.normal?.array){const n=new Float32Array(m.attributes.normal.array.length);for(let i=0;i<n.length;i++)n[i]=m.attributes.normal.array[i];aN.push(n);}
-    else aN.push(new Float32Array(nv*3));
-    if(m.index?.length){const x=new Uint32Array(m.index.length);for(let i=0;i<x.length;i++)x[i]=m.index[i]+vo;aI.push(x);}
-    vo+=nv;
-  }
-  const P=cf32(aP),N=cf32(aN),I=cu32(aI);
-  N.fill(0);
-  for(let i=0;i<I.length;i+=3){const a=I[i],b=I[i+1],c=I[i+2];
-    const ex=P[b*3]-P[a*3],ey=P[b*3+1]-P[a*3+1],ez=P[b*3+2]-P[a*3+2];
-    const fx=P[c*3]-P[a*3],fy=P[c*3+1]-P[a*3+1],fz=P[c*3+2]-P[a*3+2];
-    const nx=ey*fz-ez*fy,ny=ez*fx-ex*fz,nz=ex*fy-ey*fx;
-    N[a*3]+=nx;N[a*3+1]+=ny;N[a*3+2]+=nz;N[b*3]+=nx;N[b*3+1]+=ny;N[b*3+2]+=nz;N[c*3]+=nx;N[c*3+1]+=ny;N[c*3+2]+=nz;}
-  for(let i=0;i<N.length;i+=3){const l=Math.sqrt(N[i]**2+N[i+1]**2+N[i+2]**2);if(l>0){N[i]/=l;N[i+1]/=l;N[i+2]/=l;}}
-  return{positions:P,normals:N,indices:I};
-}
-function cf32(a){let t=0;for(const x of a)t+=x.length;const r=new Float32Array(t);let o=0;for(const x of a){r.set(x,o);o+=x.length;}return r;}
-function cu32(a){let t=0;for(const x of a)t+=x.length;const r=new Uint32Array(t);let o=0;for(const x of a){r.set(x,o);o+=x.length;}return r;}
-
-function parseSTL(buf){
-  const dv=new DataView(buf),n=dv.getUint32(80,true);
-  if(!n)throw new Error('Leere STL');
-  const p=new Float32Array(n*9),nr=new Float32Array(n*9);let o=84;
-  for(let i=0;i<n;i++){const nx=dv.getFloat32(o,true),ny=dv.getFloat32(o+4,true),nz=dv.getFloat32(o+8,true);o+=12;
-    for(let v=0;v<3;v++){p[i*9+v*3]=dv.getFloat32(o,true);p[i*9+v*3+1]=dv.getFloat32(o+4,true);p[i*9+v*3+2]=dv.getFloat32(o+8,true);
-      nr[i*9+v*3]=nx;nr[i*9+v*3+1]=ny;nr[i*9+v*3+2]=nz;o+=12;}o+=2;}
-  const idx=new Uint32Array(n*3);for(let i=0;i<n*3;i++)idx[i]=i;
-  return{positions:p,normals:nr,indices:idx};
-}
-
 async function loadFile(file){
+  // Zugriff nur für angemeldete Benutzer
+  if(!window.__isAuthed||!window.__isAuthed()){
+    info.textContent='Bitte zuerst anmelden.';
+    return;
+  }
   const nm=file.name.toLowerCase();
+  // Nur GLB-Dateien werden akzeptiert
+  if(!nm.endsWith('.glb')){
+    info.textContent='Nur GLB-Dateien werden unterstützt.';
+    return;
+  }
   info.textContent='Lade '+file.name+'...';
   try{
-    const buf=await file.arrayBuffer();let m;
-    if(nm.endsWith('.stp')||nm.endsWith('.step')){await loadOCCT();m=parseSTP(buf);}
-    else if(nm.endsWith('.stl')){m=parseSTL(buf);}
-    else{m=parseGLB(buf);}
+    const buf=await file.arrayBuffer();
+    const m=parseGLB(buf);
     uploadMesh(m.positions,m.normals,m.indices);
-    info.textContent=file.name+': '+m.positions.length/3+' verts, '+m.indices.length/3+' tris';
+    const nv=m.positions.length/3, nt=m.indices.length/3;
+    info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
+    // Metadaten in Firestore protokollieren
+    if(window.__logGLB)window.__logGLB(file.name,nv,nt,file.size);
   }catch(e){info.textContent='Fehler: '+e.message;console.error(e);}
 }
 
-/* ═══ Load embedded test mesh ═══ */
-// File drop ready
-
-/* ═══ Render ═══ */
+/* ═══ Render-Loop (4 Passes: Stencil, Modell, Cap, Kontur) ═══ */
 function render(){
   requestAnimationFrame(render);resize();
   if(!meshLoaded)return;
@@ -368,7 +482,7 @@ function render(){
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
 
-  // PASS 1: Stencil counting (no color, no depth write)
+  // Pass 1: Stencil zählen (keine Farb-/Tiefenschreibung)
   gl.enable(gl.STENCIL_TEST);gl.stencilMask(0xff);
   gl.colorMask(false,false,false,false);gl.depthMask(false);
   gl.useProgram(pSten);gl.bindVertexArray(meshVao);
@@ -383,7 +497,7 @@ function render(){
   gl.colorMask(true,true,true,true);gl.depthMask(true);
   gl.disable(gl.STENCIL_TEST);
 
-  // PASS 2: Clipped model (FrontSide, writes depth)
+  // Pass 2: Geclipptes Modell (Vorderseite, schreibt Tiefe)
   gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);
   gl.useProgram(pMain);gl.bindVertexArray(meshVao);
   gl.uniformMatrix4fv(gl.getUniformLocation(pMain,'uMVP'),false,vp);
@@ -392,7 +506,7 @@ function render(){
   gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
   gl.disable(gl.CULL_FACE);
 
-  // PASS 3: Cap (stencil!=0, depthTest ON, depthWrite OFF)
+  // Pass 3: Cap (Schnittfläche) – stencil!=0, Tiefentest an, Tiefe nicht schreiben
   gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
   gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
   gl.depthMask(false);
@@ -404,7 +518,7 @@ function render(){
   gl.disable(gl.POLYGON_OFFSET_FILL);
   gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
 
-  // PASS 4: Contour lines (always on top of model)
+  // Pass 4: Konturlinien (immer über dem Modell sichtbar)
   if(cCount>0){
     gl.useProgram(pLine);gl.bindVertexArray(cVao);
     gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);

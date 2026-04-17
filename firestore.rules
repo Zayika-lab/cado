@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// Sicherheitsregeln für Firestore – Projekt cado-aae0e
+// In der Firebase-Console einfügen: Firestore Database → Rules → Inhalt ersetzen → Veröffentlichen
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Protokoll geladener GLB-Dateien
+    match /glb_loads/{docId} {
+      // Nur angemeldete Benutzer dürfen ein Dokument anlegen und nur in ihrem eigenen Namen
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      // Jeder Benutzer darf nur seine eigenen Einträge lesen
+      allow read:   if request.auth != null
+                    && resource.data.uid == request.auth.uid;
+      // Aktualisieren oder Löschen ist nicht erlaubt
+      allow update, delete: if false;
+    }
+
+    // Standard: alles andere verweigern
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
