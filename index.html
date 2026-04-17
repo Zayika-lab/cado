@@ -677,7 +677,7 @@ function createAxisForBody(bodyIdx){
   const body=glbInfo.bodies[bodyIdx];
   let cyl=fitCylinderAxis(body);
   let axis, origin, length, label;
-  if(cyl && cyl.confidence>0.3){
+  if(cyl && cyl.confidence>0.85){
     axis=cyl.axis; origin=cyl.center; length=cyl.length; label='Zylinder: '+body.name;
   } else {
     // Fallback: PCA der Eckpunkte
@@ -1219,6 +1219,10 @@ window.__alignPartTo=alignPartTo;
 window.__principalDirection=principalDirection;
 window.setCustomCutFromFace=setCustomCutFromFace;
 window.clearCustomCut=clearCustomCut;
+window.fitCylinderAxis=fitCylinderAxis;
+window.createAxisForBody=createAxisForBody;
+window.deleteAxis=deleteAxis;
+window.createdAxes=createdAxes;
 
 // Welches Part enthält ein bestimmtes Dreieck? Lineare Suche, i.d.R. wenige Teile.
 function partFromTri(triIdx){
