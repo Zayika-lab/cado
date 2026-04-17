@@ -2589,10 +2589,13 @@ function render(){
     gl.enable(gl.STENCIL_TEST);
     for(const body of glbInfo.bodies){
       if(body.triCount===0) continue;
-      // 1) Stencil für diesen Body mit INVERT-Parität
+      // 1) Stencil für diesen Body mit INVERT-Parität.
+      // WICHTIG: depth-TEST auch aus, sonst werden verdeckte Dreiecke nicht gezählt
+      // und die Parität ist falsch (Cap-Löcher).
       gl.clearStencil(0);
       gl.clear(gl.STENCIL_BUFFER_BIT);
       gl.colorMask(false,false,false,false);gl.depthMask(false);
+      gl.disable(gl.DEPTH_TEST);
       gl.stencilMask(0xff);
       gl.stencilFunc(gl.ALWAYS,0,0xff);
       gl.stencilOp(gl.KEEP,gl.KEEP,gl.INVERT);
@@ -2601,6 +2604,7 @@ function render(){
       gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
       gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
       gl.drawElements(gl.TRIANGLES, body.triCount*3, gl.UNSIGNED_INT, body.triStart*3*4);
+      gl.enable(gl.DEPTH_TEST);
       gl.colorMask(true,true,true,true);gl.depthMask(true);
       // 2) Cap-Quad (neutralgrau) dort wo Stencil ≠ 0
       gl.stencilMask(0x00);
@@ -2610,7 +2614,7 @@ function render(){
       gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
       gl.useProgram(pCap);gl.bindVertexArray(capVao);
       gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,capMVP);
-      gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.55,0.56,0.58]);
+      gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.36,0.37,0.40]);
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       gl.disable(gl.POLYGON_OFFSET_FILL);
       gl.depthMask(true);
