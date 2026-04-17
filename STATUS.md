@@ -1,6 +1,6 @@
 # Cado — Statuslog
 
-> 🔔 **AWAITING YOU** — Schnitt on/off-toggle + axis-mode (hover на циліндр → підсвіт → клік створює вісь). 27/27 тестів ✅. **Hard-reload** (Ctrl+Shift+R) щоб побачити новий UI.
+> 🔔 **AWAITING YOU** — axis/face-pick hover тепер підсвічує ЛИШЕ поверхню під курсором (flood-fill з порогом 31° по кутам нормалей), не весь body. На test_6.glb: 80/11966 трикутників → Zylinder-axis Y. 28/28 ✅.
 
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 
