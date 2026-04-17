@@ -93,7 +93,7 @@ canvas{display:block;width:100%;height:100%}
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
   import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-  import { getStorage, ref as sRef, uploadBytes, getDownloadURL }
+  import { getStorage, ref as sRef, uploadBytes, getBytes }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-storage.js";
 
   // Firebase-Konfiguration für das Projekt cado-aae0e
@@ -210,10 +210,8 @@ canvas{display:block;width:100%;height:100%}
       });
       if (!latest) { if (info) info.textContent = ''; return; }
       if (info) info.textContent = 'Lade ' + latest.data.filename + ' vom Server...';
-      const url = await getDownloadURL(sRef(storage, latest.data.storagePath));
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      const buf = await resp.arrayBuffer();
+      // getBytes umgeht CORS (nutzt den SDK-Transport statt direkten Fetch auf Download-URL)
+      const buf = await getBytes(sRef(storage, latest.data.storagePath));
       if (window.__loadGLBBuffer) window.__loadGLBBuffer(latest.data.filename, buf);
     } catch (e) {
       console.error('Wiederherstellen fehlgeschlagen:', e);
