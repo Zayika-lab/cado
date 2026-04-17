@@ -37,7 +37,8 @@ test('single middle-click on model recenters target after 0.3s', async ({ page }
 
   // Click slightly off-center, which should hit the triangle
   await midClick(page, 700, 420);
-  // Single-click action is delayed by MID_DELAY (100ms) + smooth anim (220ms).
+  // Single-click is delayed by SINGLE_DELAY (100ms) + anim (220ms). No second
+  // click means the single fires after SINGLE_DELAY.
   await page.waitForTimeout(450);
 
   const s1 = await page.evaluate(() => window.__state());

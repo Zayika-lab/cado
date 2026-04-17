@@ -662,7 +662,7 @@ function genSphereWireframe(nLat,nLon){
   }
   return new Float32Array(v);
 }
-const sphereVerts=genSphereWireframe(14,28);
+const sphereVerts=genSphereWireframe(8,16);
 const sphereVao=gl.createVertexArray();gl.bindVertexArray(sphereVao);
 const sphereBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sphereBuf);
 gl.bufferData(gl.ARRAY_BUFFER,sphereVerts,gl.STATIC_DRAW);
@@ -855,7 +855,8 @@ function pickModel(mx,my){
 /* ═══ Mittelklick-Logik: Single = recenter, Doppel = Flächen-Ausrichtung ═══ */
 var __midDown=null, __midMoved=false;
 var __lastMidClick=0, __singleTimer=null;
-const MID_DELAY=100;       // ms — Single vs Double unterscheiden
+const SINGLE_DELAY=100;    // ms — Verzögerung bis Single-Click-Aktion feuert
+const DOUBLE_WINDOW=300;   // ms — zweiter Klick innerhalb dieses Fensters = Doppelklick
 const NAV_ANIM_DUR=220;    // ms — weicher Übergang bei recenter/face-align
 
 // Quaternion-SLERP (Sphärische lineare Interpolation)
@@ -914,12 +915,16 @@ function onDoubleMid(mx,my){
 }
 function onMidClick(mx,my){
   const now=performance.now();
-  if(now-__lastMidClick<MID_DELAY && __singleTimer){
-    clearTimeout(__singleTimer); __singleTimer=null; __lastMidClick=0;
+  if(now-__lastMidClick<DOUBLE_WINDOW){
+    // Zweiter Klick innerhalb des Doppelklick-Fensters — Single-Timer (falls noch
+    // anhängig) abbrechen und Face-Align starten. Eine bereits laufende Single-
+    // Click-Animation wird von der neuen Doppelklick-Animation weich übernommen.
+    if(__singleTimer){ clearTimeout(__singleTimer); __singleTimer=null; }
+    __lastMidClick=0;
     onDoubleMid(mx,my);
   } else {
     __lastMidClick=now;
-    __singleTimer=setTimeout(()=>{ __singleTimer=null; onSingleMid(mx,my); }, MID_DELAY);
+    __singleTimer=setTimeout(()=>{ __singleTimer=null; onSingleMid(mx,my); }, SINGLE_DELAY);
   }
 }
 
@@ -967,8 +972,10 @@ window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphere
   navAnim: navAnim?{t0:navAnim.t0,dur:navAnim.dur,qE:[...navAnim.qE],tE:[...navAnim.tE]}:null,
   lastMid:__lastMidClick, hasTimer:!!__singleTimer});
 window.__pickModel=pickModel;
-window.__MID_DELAY=MID_DELAY;
+window.__SINGLE_DELAY=SINGLE_DELAY;
+window.__DOUBLE_WINDOW=DOUBLE_WINDOW;
 window.__forceDoubleMid=onDoubleMid; // for tests only
+window.__onMidClick=onMidClick;      // for tests only
 
 /* ═══ GLB-Loader (Binary glTF 2.0) – mit voller Node-Hierarchie für Baugruppen ═══ */
 function parseGLB(buf){
@@ -1240,14 +1247,9 @@ function render(){
     gl.useProgram(pSphere);
     gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,smvp);
 
-    // Halbtransparente Dreiecks-Füllung
-    gl.bindVertexArray(sphereTriVao);
-    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.08]);
-    gl.drawArrays(gl.TRIANGLES,0,sphereTriCount);
-
-    // Wireframe-Overlay für Lesbarkeit der Rotation
+    // Nur Wireframe — keine Flächenfüllung, reiner "Drahtmodell-Globus"
     gl.bindVertexArray(sphereVao);
-    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.45]);
+    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.55]);
     gl.drawArrays(gl.LINES,0,sphereVertCount);
 
     gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
