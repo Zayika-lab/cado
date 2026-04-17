@@ -167,40 +167,82 @@ canvas{display:block;width:100%;height:100%}
     }
   });
 
-  // Speichert GLB-Binärdaten in Storage und Metadaten in Firestore
+  // IndexedDB-Hilfsfunktionen (lokale Kopie des GLB pro Benutzer)
+  function openIDB() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('cadoGLB', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files', { keyPath: 'uid' });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbPut(uid, filename, buf) {
+    const idb = await openIDB();
+    return new Promise((res, rej) => {
+      const tx = idb.transaction('files', 'readwrite');
+      tx.objectStore('files').put({ uid, filename, buf, ts: Date.now() });
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+  }
+  async function idbGet(uid) {
+    const idb = await openIDB();
+    return new Promise((res, rej) => {
+      const tx = idb.transaction('files', 'readonly');
+      const req = tx.objectStore('files').get(uid);
+      req.onsuccess = () => res(req.result || null);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  // Speichert GLB lokal (IndexedDB) und im Hintergrund auf Firebase (Storage + Firestore)
   window.__saveGLB = async (file, vertCount, triCount) => {
     if (!currentUser) return;
-    try {
-      // Eindeutiger Pfad je Benutzer und Zeitstempel
-      const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
-      const ref = sRef(storage, path);
-      await uploadBytes(ref, file, { contentType: 'model/gltf-binary' });
-      await addDoc(collection(db, 'glb_loads'), {
-        uid: currentUser.uid,
-        email: currentUser.email || null,
-        displayName: currentUser.displayName || null,
-        filename: file.name,
-        vertCount,
-        triCount,
-        sizeBytes: file.size,
-        storagePath: path,
-        createdAt: serverTimestamp()
-      });
-    } catch (e) {
-      console.warn('Speichern fehlgeschlagen:', e);
-    }
+    const buf = await file.arrayBuffer();
+    // 1) Lokal speichern – sofortige Wiederherstellung beim nächsten Start
+    try { await idbPut(currentUser.uid, file.name, buf); }
+    catch (e) { console.warn('IndexedDB-Speichern fehlgeschlagen:', e); }
+    // 2) Im Hintergrund auf Firebase hochladen (blockiert UI nicht, CORS-Probleme egal)
+    (async () => {
+      try {
+        const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
+        await uploadBytes(sRef(storage, path), file, { contentType: 'model/gltf-binary' });
+        await addDoc(collection(db, 'glb_loads'), {
+          uid: currentUser.uid,
+          email: currentUser.email || null,
+          displayName: currentUser.displayName || null,
+          filename: file.name,
+          vertCount,
+          triCount,
+          sizeBytes: file.size,
+          storagePath: path,
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn('Firebase-Upload fehlgeschlagen (lokale Kopie bleibt):', e);
+      }
+    })();
   };
 
-  // Lädt das zuletzt hochgeladene GLB (nach Anmeldung)
+  // Lädt das zuletzt hochgeladene GLB (IndexedDB zuerst, dann Firebase als Fallback)
   async function loadLatestGLB() {
     const info = document.getElementById('info');
+    // 1) Versuche zuerst die lokale Kopie (sofort, kein Netz, kein CORS)
     try {
-      if (info) info.textContent = 'Suche gespeicherte Datei...';
-      // Nur eigene Einträge abfragen; Sortierung clientseitig → keine Composite-Index nötig
+      const local = await idbGet(currentUser.uid);
+      if (local && local.buf) {
+        if (info) info.textContent = 'Lade ' + local.filename + ' (lokal)...';
+        if (window.__loadGLBBuffer) window.__loadGLBBuffer(local.filename, local.buf);
+        return;
+      }
+    } catch (e) { console.warn('IndexedDB-Lesen fehlgeschlagen:', e); }
+
+    // 2) Fallback: Firebase (nötig für Gerätewechsel / neue Browser)
+    try {
+      if (info) info.textContent = 'Suche auf Server...';
       const q = query(collection(db, 'glb_loads'), where('uid', '==', currentUser.uid));
       const snap = await getDocs(q);
       if (snap.empty) { if (info) info.textContent = ''; return; }
-      // Nur Einträge mit storagePath berücksichtigen; neuesten auswählen
       let latest = null;
       snap.forEach(d => {
         const data = d.data();
@@ -210,12 +252,13 @@ canvas{display:block;width:100%;height:100%}
       });
       if (!latest) { if (info) info.textContent = ''; return; }
       if (info) info.textContent = 'Lade ' + latest.data.filename + ' vom Server...';
-      // getBytes umgeht CORS (nutzt den SDK-Transport statt direkten Fetch auf Download-URL)
       const buf = await getBytes(sRef(storage, latest.data.storagePath));
+      // Nach erfolgreichem Server-Download auch lokal cachen
+      try { await idbPut(currentUser.uid, latest.data.filename, buf); } catch {}
       if (window.__loadGLBBuffer) window.__loadGLBBuffer(latest.data.filename, buf);
     } catch (e) {
-      console.error('Wiederherstellen fehlgeschlagen:', e);
-      if (info) info.textContent = 'Wiederherstellen fehlgeschlagen: ' + (e.code || e.message);
+      console.error('Server-Wiederherstellen fehlgeschlagen:', e);
+      if (info) info.textContent = 'Server nicht erreichbar (' + (e.code || e.message) + ')';
     }
   }
 
