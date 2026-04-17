@@ -9,3 +9,7 @@ cado-sa.json
 firestore-debug.log
 firebase-debug.log
 ui-debug.log
+
+# Приватні тестові файли користувача — НЕ комітимо, НЕ пушимо на GitHub
+test files/
+"test files"/
