@@ -58,5 +58,5 @@ test('align leg to screen-X rotates the scene so col0(rot)=D_world', async ({ pa
   // col0 should now equal D_world (up to sign for rare 180° flip edge case)
   expect(Math.abs(dot)).toBeGreaterThan(0.99);
 
-  await page.screenshot({ path: path.join(SHOTS, 'align-leg-to-x.png') });
+  await page.screenshot({ path: path.join(SHOTS, '12_align-leg-to-x.png') });
 });

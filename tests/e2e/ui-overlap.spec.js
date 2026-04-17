@@ -44,7 +44,7 @@ function overlap(a, b) {
 
 test('fpToggle and loadBtn do not overlap — panel CLOSED', async ({ page }) => {
   const { errors } = await openWithLoadedMesh(page);
-  await page.screenshot({ path: path.join(SHOTS, 'panel-closed.png') });
+  await page.screenshot({ path: path.join(SHOTS, '01_overlap-panel-closed.png') });
   const t = await page.locator('#fpToggle').boundingBox();
   const l = await page.locator('#loadBtn').boundingBox();
   console.log('closed  fpToggle=', t, ' loadBtn=', l, ' errors=', errors.length);
@@ -59,7 +59,7 @@ test('fpToggle and loadBtn do not overlap — panel OPEN', async ({ page }) => {
     document.getElementById('fpToggle').classList.add('shifted');
   });
   await page.waitForTimeout(350); // CSS transition 220ms
-  await page.screenshot({ path: path.join(SHOTS, 'panel-open.png') });
+  await page.screenshot({ path: path.join(SHOTS, '02_overlap-panel-open.png') });
   const t = await page.locator('#fpToggle').boundingBox();
   const l = await page.locator('#loadBtn').boundingBox();
   console.log('open    fpToggle=', t, ' loadBtn=', l);

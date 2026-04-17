@@ -48,7 +48,7 @@ test('right-click on chair shows part + material info popup', async ({ page }) =
   expect(popText).toMatch(/wood/i);
   expect(popText).toMatch(/chair\.glb/);
 
-  await page.screenshot({ path: path.join(SHOTS, 'glb-info-popup.png') });
+  await page.screenshot({ path: path.join(SHOTS, '10_glb-info-popup.png') });
 
   // ESC hides it
   await page.keyboard.press('Escape');

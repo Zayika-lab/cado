@@ -36,7 +36,7 @@ test('parts panel lists parts, click toggles highlight', async ({ page }) => {
 
   // Screenshot to show highlight
   await page.waitForTimeout(200);
-  await page.screenshot({ path: path.join(SHOTS, 'parts-panel-highlight.png') });
+  await page.screenshot({ path: path.join(SHOTS, '11_parts-panel-highlight.png') });
 
   // Click again to deselect
   await items.nth(1).click();

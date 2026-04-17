@@ -38,7 +38,7 @@ test('sphere size slider exists and updates _sphereScale', async ({ page }) => {
   expect(before).toBeCloseTo(0.54, 2);
   expect(after).toBeCloseTo(1.20, 2);
 
-  await page.screenshot({ path: path.join(SHOTS, 'sphere-slider-1.2.png') });
+  await page.screenshot({ path: path.join(SHOTS, '09_sphere-slider-1.2.png') });
 });
 
 async function qDelta(a, b) {
@@ -50,7 +50,7 @@ async function qDelta(a, b) {
 test('middle-drag INSIDE sphere rotates (arcball) and sphere visually rotates', async ({ page }) => {
   await openLoaded(page);
   const q0 = await page.evaluate(() => window.__state().arcQ);
-  await page.screenshot({ path: path.join(SHOTS, 'sphere-before.png') });
+  await page.screenshot({ path: path.join(SHOTS, '07_sphere-before.png') });
 
   // Viewport 1280×800, sphere r = 800*0.54/2 = 216px, center (640,400)
   // Drag from (640,400) → (780,470) → both inside sphere, bigger motion for visible change.
@@ -59,7 +59,7 @@ test('middle-drag INSIDE sphere rotates (arcball) and sphere visually rotates', 
   await page.mouse.move(780, 470, { steps: 10 });
   await page.mouse.up({ button: 'middle' });
   await page.waitForTimeout(120);
-  await page.screenshot({ path: path.join(SHOTS, 'sphere-after.png') });
+  await page.screenshot({ path: path.join(SHOTS, '08_sphere-after.png') });
 
   const q1 = await page.evaluate(() => window.__state().arcQ);
   const delta = await qDelta(q0, q1);
@@ -69,8 +69,8 @@ test('middle-drag INSIDE sphere rotates (arcball) and sphere visually rotates', 
   // Visual rotation check: the two saved screenshots must differ in the
   // sphere region (otherwise the sphere appears static despite arcQ changing).
   const fs2 = await import('fs');
-  const bef = fs2.readFileSync(path.join(SHOTS, 'sphere-before.png'));
-  const aft = fs2.readFileSync(path.join(SHOTS, 'sphere-after.png'));
+  const bef = fs2.readFileSync(path.join(SHOTS, '07_sphere-before.png'));
+  const aft = fs2.readFileSync(path.join(SHOTS, '08_sphere-after.png'));
   const differ = bef.length !== aft.length || !bef.equals(aft);
   console.log('screenshots differ:', differ, ' before=', bef.length, ' after=', aft.length);
   expect(differ, 'sphere rendered identically before and after rotation').toBe(true);
