@@ -102,6 +102,9 @@ canvas{display:block;width:100%;height:100%}
   font:12px system-ui;backdrop-filter:blur(8px);display:none;transition:left 0.22s ease}
 #fpToggle.show{display:block}
 #fpToggle.shifted{left:270px}
+/* Load-File-Knopf unter dem Panel-Toggle, damit er sich nicht überlagert */
+#loadBtn{transition:left 0.22s ease}
+#filesPanel.open ~ #loadBtn{left:270px!important}
 </style></head><body>
 
 <!-- Anmeldebildschirm (zuerst sichtbar) -->
@@ -592,7 +595,7 @@ function uploadMesh(positions,normals,indices){
   if(!document.getElementById('loadBtn')){
     const lb=document.createElement('button');lb.id='loadBtn';
     lb.textContent='\u{1F4C2} Datei laden';
-    lb.style.cssText='position:fixed;top:10px;left:10px;z-index:20;background:rgba(20,22,28,0.9);border:1px solid rgba(74,142,255,0.3);border-radius:7px;padding:7px 14px;color:#4a8eff;cursor:pointer;font:12px system-ui;backdrop-filter:blur(8px)';
+    lb.style.cssText='position:fixed;top:50px;left:10px;z-index:20;background:rgba(20,22,28,0.9);border:1px solid rgba(74,142,255,0.3);border-radius:7px;padding:7px 14px;color:#4a8eff;cursor:pointer;font:12px system-ui;backdrop-filter:blur(8px)';
     lb.onclick=()=>document.getElementById('fi').click();
     document.body.appendChild(lb);
   }
