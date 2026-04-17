@@ -720,15 +720,14 @@ float hl(vec3 n, vec3 l){ return pow(max(dot(n,l)*0.5+0.5, 0.0), 1.6); }
 void main(){
   if(dot(vec4(vW,1),uClip)<0.)discard;
   vec3 n=normalize(gl_FrontFacing?vN:-vN);
-  // 3-Punkt-Licht (Key + Fill + Back) mit Half-Lambert für weichen Übergang
+  // 3-Punkt-Licht mit Half-Lambert für weiche Übergänge. Kein Rim — der erzeugte
+  // auf grazing-Winkeln Bandingartefakte entlang der Silhouetten.
   float lKey  = hl(n, normalize(vec3( 0.55, 0.70, 0.45)));
   float lFill = hl(n, normalize(vec3(-0.65, 0.25, 0.35)));
   float lBack = hl(n, normalize(vec3( 0.10,-0.35,-0.80)));
-  float amb = 0.22;
-  float diffuse = lKey*0.52 + lFill*0.24 + lBack*0.12;
-  // Sanfter Rim-Highlight an den Silhouetten für Volumengefühl
-  float rim = pow(1.0 - max(dot(n, vec3(0.0,0.0,1.0)), 0.0), 2.5) * 0.12;
-  vec3 col = uC * (amb + diffuse) + vec3(rim);
+  float amb = 0.26;
+  float diffuse = lKey*0.50 + lFill*0.24 + lBack*0.12;
+  vec3 col = uC * (amb + diffuse);
   f = vec4(col, 1);
 }`);
 
@@ -2462,7 +2461,12 @@ function render(){
   view[8]=rot[2];view[9]=rot[6];view[10]=rot[10];
   view[12]=-(view[0]*cp[0]+view[4]*cp[1]+view[8]*cp[2]);view[13]=-(view[1]*cp[0]+view[5]*cp[1]+view[9]*cp[2]);
   view[14]=-(view[2]*cp[0]+view[6]*cp[1]+view[10]*cp[2]);view[15]=1;
-  const proj=ortho(-oSize*asp,oSize*asp,-oSize,oSize,1,100000);
+  // Tiefenbereich eng um das Modell → maximale 24-bit Depth-Präzision (kein z-fighting
+  // zwischen nah aneinanderliegenden Teilen in Assemblies).
+  const __md = maxDim || 1;
+  const __near = Math.max(1, 5000 - __md*3);
+  const __far = 5000 + __md*3 + 10;
+  const proj=ortho(-oSize*asp,oSize*asp,-oSize,oSize,__near,__far);
   const vp=mul(proj,view);
   // Generische Schnittebene: discard where -N·p + d < 0 ⟺ N·p > d
   // Wenn Schnitt deaktiviert: (0,0,0,1) — dot = 1 > 0, niemals verwerfen.
@@ -2478,20 +2482,9 @@ function render(){
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
 
-  // Pass 1: Stencil über Parität (INVERT) — robust für komplexe Meshes mit
-  // internen Flächen. Jedes vom Ray getroffene Dreieck togglet das Stencil-Bit.
-  // Ungerade Anzahl = innerhalb Cross-Section, gerade = aussen.
-  gl.enable(gl.STENCIL_TEST);gl.stencilMask(0xff);
-  gl.colorMask(false,false,false,false);gl.depthMask(false);
-  gl.disable(gl.CULL_FACE);
-  gl.stencilFunc(gl.ALWAYS,0,0xff);
-  gl.stencilOp(gl.KEEP,gl.KEEP,gl.INVERT);
-  gl.useProgram(pSten);gl.bindVertexArray(meshVao);
-  gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
-  gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
-  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
-  gl.colorMask(true,true,true,true);gl.depthMask(true);
-  gl.disable(gl.STENCIL_TEST);
+  // Pass 1 entfällt — Cap wird pro Body (glTF-Knoten = geschlossener Körper)
+  // innerhalb der Cap-Schleife aufgebaut. Globaler INVERT-Count versagt in
+  // Assemblies, weil mehrere Körper parity vermischen.
 
   // Pass 2: Geclipptes Modell (Vorderseite, schreibt Tiefe)
   // Farbwahl: primär nach MATERIAL-NAME aus dem glTF (z.B. "Stahl" → Stahlgrau).
@@ -2546,19 +2539,18 @@ function render(){
     gl.depthFunc(gl.LEQUAL);
   }
 
-  // Pass 2.4: Feature-Kanten über dem Modell. Dieselbe Cut-Ebene wie das Modell,
-  // damit abgeschnittene Kanten auch verschwinden (nicht in die "Luft" ragen).
+  // Pass 2.4: Feature-Kanten. Keine PolygonOffset-Slope (die bricht bei grazing-
+  // Winkeln auseinander), nur sanfter konstanter Bias via depthFunc LESS.
   if(featureEdgeVao && featureEdgeCount>0){
     gl.useProgram(pLine);
     gl.bindVertexArray(featureEdgeVao);
     gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
-    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0.05,0.07,0.10,0.85]);
+    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0.05,0.07,0.10,0.9]);
     gl.uniform4fv(gl.getUniformLocation(pLine,'uClip'),cv4);
     gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
-    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(-1,-1);
+    gl.depthFunc(gl.LEQUAL);
     gl.drawArrays(gl.LINES, 0, featureEdgeCount);
-    gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.depthMask(true);gl.disable(gl.BLEND);
   }
 
@@ -2587,19 +2579,45 @@ function render(){
   }
   gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
 
-  // Pass 3 & 4: Cap + Konturlinien bei aktivem Schnitt (unverändert, eine Farbe)
-  if(cutEnabled){
-    gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
-    gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
-    gl.depthMask(false);
-    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
-    gl.useProgram(pCap);gl.bindVertexArray(capVao);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
-    gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.55,0.56,0.58]);
-    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-    gl.disable(gl.POLYGON_OFFSET_FILL);
-    gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+  // Pass 3: Cap pro Body. Jeder Body (glTF-Knoten) ist ein eigener geschlossener
+  // Körper — sein Cross-Section wird separat via Stencil-INVERT ermittelt, damit
+  // überlappende/ineinander verschachtelte Teile sich nicht stencil-technisch
+  // auslöschen. Cap wird in neutralem Grau gefüllt (Material-Farbe je Cap wäre
+  // beim Assembly verwirrend, da Teile übereinander liegen).
+  if(cutEnabled && glbInfo && glbInfo.bodies && glbInfo.bodies.length>0){
+    const capMVP=mul(vp,capMat());
+    gl.enable(gl.STENCIL_TEST);
+    for(const body of glbInfo.bodies){
+      if(body.triCount===0) continue;
+      // 1) Stencil für diesen Body mit INVERT-Parität
+      gl.clearStencil(0);
+      gl.clear(gl.STENCIL_BUFFER_BIT);
+      gl.colorMask(false,false,false,false);gl.depthMask(false);
+      gl.stencilMask(0xff);
+      gl.stencilFunc(gl.ALWAYS,0,0xff);
+      gl.stencilOp(gl.KEEP,gl.KEEP,gl.INVERT);
+      gl.disable(gl.CULL_FACE);
+      gl.useProgram(pSten);gl.bindVertexArray(meshVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
+      gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
+      gl.drawElements(gl.TRIANGLES, body.triCount*3, gl.UNSIGNED_INT, body.triStart*3*4);
+      gl.colorMask(true,true,true,true);gl.depthMask(true);
+      // 2) Cap-Quad (neutralgrau) dort wo Stencil ≠ 0
+      gl.stencilMask(0x00);
+      gl.stencilFunc(gl.NOTEQUAL,0,0xff);
+      gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
+      gl.depthMask(false);
+      gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
+      gl.useProgram(pCap);gl.bindVertexArray(capVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,capMVP);
+      gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.55,0.56,0.58]);
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.depthMask(true);
+    }
+    gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
 
+    // Konturlinien auf Cut-Plane (aus der Contour-Berechnung)
     if(cCount>0){
       gl.useProgram(pLine);gl.bindVertexArray(cVao);
       gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
