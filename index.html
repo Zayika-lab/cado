@@ -2376,12 +2376,25 @@ function render(){
   gl.disable(gl.STENCIL_TEST);
 
   // Pass 2: Geclipptes Modell (Vorderseite, schreibt Tiefe)
+  // Jeden Primitive mit seiner Material-baseColor zeichnen (fallt zurück auf Grau).
   gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);
   gl.useProgram(pMain);gl.bindVertexArray(meshVao);
   gl.uniformMatrix4fv(gl.getUniformLocation(pMain,'uMVP'),false,vp);
   gl.uniform4fv(gl.getUniformLocation(pMain,'uClip'),cv4);
-  gl.uniform3fv(gl.getUniformLocation(pMain,'uC'),[0.33,0.6,0.93]);
-  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  const uCLoc=gl.getUniformLocation(pMain,'uC');
+  if(glbInfo && glbInfo.parts && glbInfo.parts.length>0){
+    for(const p of glbInfo.parts){
+      if(p.triCount===0) continue;
+      const mat=p.materialIdx>=0 ? glbInfo.materials[p.materialIdx] : null;
+      const bc=mat ? mat.baseColor : [0.7,0.72,0.76,1];
+      gl.uniform3fv(uCLoc,[bc[0],bc[1],bc[2]]);
+      gl.drawElements(gl.TRIANGLES, p.triCount*3, gl.UNSIGNED_INT, p.triStart*3*4);
+    }
+  } else {
+    // Fallback: einfarbiges Rendern wenn keine Material-Info vorliegt
+    gl.uniform3fv(uCLoc,[0.33,0.6,0.93]);
+    gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  }
   gl.disable(gl.CULL_FACE);
 
   // Pass 2.3a: Benutzererzeugte Ebenen (halbtransparente Quads)
