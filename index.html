@@ -393,31 +393,74 @@ canvas{display:block;width:100%;height:100%}
       try { await idbPut(f.docId, currentUser.uid, f.filename, buf); } catch {}
       if (window.__loadGLBBuffer) window.__loadGLBBuffer(f.filename, buf);
     } catch (e) {
-      console.warn('Server-Laden übersprungen:', e.code || e.message);
-      if (info) info.textContent = 'Nur am Ursprungsgerät verfügbar (' + (e.code || 'CORS') + ')';
+      const code = e.code || '';
+      console.warn('Server-Laden übersprungen:', code || e.message);
+      // Waisen-Eintrag (Storage-Objekt fehlt) automatisch bereinigen
+      if (code === 'storage/object-not-found') {
+        if (info) info.textContent = 'Datei fehlt auf Server – Eintrag wird bereinigt...';
+        try {
+          await deleteDoc(doc(db, 'glb_loads', f.docId));
+          try { await idbDelete(f.docId); } catch {}
+          await refreshFiles();
+          if (info) info.textContent = 'Waisen-Eintrag entfernt.';
+        } catch (e2) {
+          console.warn('Waisen-Bereinigung fehlgeschlagen:', e2.code || e2.message);
+          if (info) info.textContent = 'Datei fehlt auf Server (bereinigen: Rules prüfen)';
+        }
+      } else {
+        if (info) info.textContent = 'Nur am Ursprungsgerät verfügbar (' + (code || 'CORS') + ')';
+      }
     }
   }
 
   // Datei aus Storage + Firestore + IDB löschen
   async function deleteFile(f) {
+    const info = document.getElementById('info');
+    let storageErr = null, firestoreErr = null;
     try { await deleteObject(sRef(storage, f.storagePath)); }
-    catch (e) { console.warn('Storage-Löschen fehlgeschlagen:', e.code || e.message); }
+    catch (e) {
+      // object-not-found ist ok – Storage-Objekt fehlte bereits
+      if (e.code !== 'storage/object-not-found') storageErr = e;
+      console.warn('Storage-Löschen:', e.code || e.message);
+    }
     try { await deleteDoc(doc(db, 'glb_loads', f.docId)); }
-    catch (e) { console.warn('Firestore-Löschen fehlgeschlagen:', e.code || e.message); }
+    catch (e) {
+      firestoreErr = e;
+      console.warn('Firestore-Löschen:', e.code || e.message);
+    }
     try { await idbDelete(f.docId); } catch {}
     if (activeDocId === f.docId) {
       activeDocId = null;
       if (window.__resetViewer) window.__resetViewer();
     }
     await refreshFiles();
+    // Nutzer sichtbar informieren, wenn Löschen serverseitig blockiert wurde
+    if (firestoreErr) {
+      if (info) info.textContent = 'Löschen blockiert: ' + (firestoreErr.code || firestoreErr.message) + ' – Firestore-Rules prüfen.';
+    } else if (storageErr) {
+      if (info) info.textContent = 'Storage-Löschen: ' + (storageErr.code || storageErr.message);
+    }
   }
 
-  // Speichert GLB: Firestore-Doc (mit storagePath), lokaler Cache, Storage im Hintergrund
+  // Speichert GLB: Storage-Upload zuerst, dann Firestore-Doc (vermeidet Waisen-Einträge)
   window.__saveGLB = async (file, vertCount, triCount) => {
     if (!currentUser) return;
     const buf = await file.arrayBuffer();
+    const info = document.getElementById('info');
+    const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
+    // 1) Zuerst auf Firebase Storage hochladen – wenn das scheitert, wird kein Doc angelegt
+    let storageOk = false;
     try {
-      const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
+      if (info) info.textContent = 'Hochladen auf Server...';
+      await uploadBytes(sRef(storage, path), file, { contentType: 'model/gltf-binary' });
+      storageOk = true;
+    } catch (e) {
+      console.warn('Storage-Upload fehlgeschlagen:', e.code || e.message);
+      if (info) info.textContent = 'Server-Upload fehlgeschlagen: ' + (e.code || e.message) + ' – nur lokal gespeichert.';
+    }
+    // 2) Firestore-Doc nur anlegen, wenn Storage-Upload erfolgreich war
+    if (!storageOk) return;
+    try {
       const docRef = await addDoc(collection(db, 'glb_loads'), {
         uid: currentUser.uid,
         email: currentUser.email || null,
@@ -430,15 +473,13 @@ canvas{display:block;width:100%;height:100%}
       });
       try { await idbPut(docRef.id, currentUser.uid, file.name, buf); }
       catch (e) { console.warn('IndexedDB-Speichern fehlgeschlagen:', e); }
-      // Storage-Upload im Hintergrund (CORS-Schreiben funktioniert ohne Spezialkonfig)
-      (async () => {
-        try { await uploadBytes(sRef(storage, path), file, { contentType: 'model/gltf-binary' }); }
-        catch (e) { console.warn('Firebase-Upload fehlgeschlagen (lokale Kopie bleibt):', e); }
-      })();
       activeDocId = docRef.id;
       await refreshFiles();
+      if (info) info.textContent = file.name + ': ' + vertCount + ' verts, ' + triCount + ' tris (gespeichert)';
     } catch (e) {
-      console.warn('Speichern fehlgeschlagen:', e);
+      console.warn('Firestore-Speichern fehlgeschlagen:', e);
+      // Storage-Objekt wieder löschen, um Waisen-Dateien zu vermeiden
+      try { await deleteObject(sRef(storage, path)); } catch {}
     }
   };
 

@@ -13,8 +13,11 @@ service cloud.firestore {
       // Jeder Benutzer darf nur seine eigenen Einträge lesen
       allow read:   if request.auth != null
                     && resource.data.uid == request.auth.uid;
-      // Aktualisieren oder Löschen ist nicht erlaubt
-      allow update, delete: if false;
+      // Löschen nur durch den Eigentümer
+      allow delete: if request.auth != null
+                    && resource.data.uid == request.auth.uid;
+      // Aktualisieren ist nicht erlaubt
+      allow update: if false;
     }
 
     // Standard: alles andere verweigern
