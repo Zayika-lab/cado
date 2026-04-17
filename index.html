@@ -165,11 +165,11 @@ canvas{display:block;width:100%;height:100%}
 <script type="module">
   // Firebase SDK-Module direkt vom Google-CDN laden
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
-  import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut, connectAuthEmulator }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs, deleteDoc, doc }
+  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs, deleteDoc, doc, connectFirestoreEmulator }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-  import { getStorage, ref as sRef, uploadBytes, getBytes, deleteObject }
+  import { getStorage, ref as sRef, uploadBytes, getBytes, deleteObject, connectStorageEmulator }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-storage.js";
 
   // Firebase-Konfiguration für das Projekt cado-aae0e
@@ -188,6 +188,18 @@ canvas{display:block;width:100%;height:100%}
   const db = getFirestore(app);
   const storage = getStorage(app);
   const provider = new GoogleAuthProvider();
+
+  // Test-Modus: ?test=emu → lokale Emulatoren + anonyme Anmeldung (kein Google-Popup)
+  const __testEmu = new URLSearchParams(location.search).get('test') === 'emu';
+  if (__testEmu) {
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    connectFirestoreEmulator(db, '127.0.0.1', 8080);
+    connectStorageEmulator(storage, '127.0.0.1', 9199);
+    signInAnonymously(auth).catch(e => {
+      const el = document.getElementById('authErr');
+      if (el) el.textContent = 'Emu-Login fehlgeschlagen: ' + (e.code || e.message);
+    });
+  }
 
   // DOM-Referenzen für die Anmelde-UI
   const authEl = document.getElementById('auth');
