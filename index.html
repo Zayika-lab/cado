@@ -1276,7 +1276,42 @@ function axisModeClick(mx,my){
   return true;
 }
 // ESC beendet Axis-Modus
-document.addEventListener('keydown',e=>{ if(e.key==='Escape' && axisMode) toggleAxisMode(false); });
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(axisMode) toggleAxisMode(false);
+    if(facePickMode) toggleFacePickMode(false);
+  }
+});
+
+// ═══ Face-Pick-Modus für Schnittebene ═══
+var facePickMode=false, hoverFaceHit=null;
+function toggleFacePickMode(on){
+  facePickMode = on !== undefined ? on : !facePickMode;
+  document.body.classList.toggle('facePick', facePickMode);
+  document.getElementById('cutPickBtn').classList.toggle('active', facePickMode);
+  if(!facePickMode){ hoverFaceHit=null; }
+}
+function facePickHover(mx,my){
+  if(!facePickMode||!meshLoaded){ hoverFaceHit=null; return; }
+  const hit=pickModel(mx,my);
+  if(hit && !hit.isCap && hit.triIdx>=0){
+    const partIdx=glbInfo.parts.findIndex(p=>hit.triIdx>=p.triStart && hit.triIdx<p.triStart+p.triCount);
+    const bodyIdx=partIdx>=0 ? glbInfo.bodies.findIndex(b=>b.partIndices.includes(partIdx)) : -1;
+    hoverFaceHit = { hit, bodyIdx };
+  } else {
+    hoverFaceHit=null;
+  }
+}
+function facePickClick(mx,my){
+  if(!facePickMode||!hoverFaceHit) return false;
+  setCustomCutFromFace(hoverFaceHit.hit.normal, hoverFaceHit.hit.point);
+  toggleFacePickMode(false);
+  return true;
+}
+document.getElementById('cutPickBtn').addEventListener('click',()=>{
+  // Toggle (wenn Schnitt noch aus war, wird er beim Setzen der Ebene automatisch aktiviert)
+  toggleFacePickMode();
+});
 window.__principalDirection=principalDirection;
 window.setCustomCutFromFace=setCustomCutFromFace;
 window.clearCustomCut=clearCustomCut;
@@ -1500,6 +1535,9 @@ cv.onmousedown=e=>{
   if(axisMode && e.button===0){
     if(axisModeClick(e.clientX, e.clientY)) return;
   }
+  if(facePickMode && e.button===0){
+    if(facePickClick(e.clientX, e.clientY)) return;
+  }
   if(e.button===1){
     arcBegin(e.clientX,e.clientY);
     __midDown=[e.clientX,e.clientY]; __midMoved=false;
@@ -1522,6 +1560,7 @@ window.onmousemove=e=>{
     target=[pt0[0]-rm[0]*dx+rm[4]*dy, pt0[1]-rm[1]*dx+rm[5]*dy, pt0[2]-rm[2]*dx+rm[6]*dy];
   }
   if(axisMode) axisModeHover(e.clientX, e.clientY);
+  if(facePickMode) facePickHover(e.clientX, e.clientY);
 };
 window.onmouseup=e=>{
   if(!e||e.button===1){
@@ -1876,6 +1915,9 @@ function render(){
   }
   if(axisMode && hoverBodyIdx>=0 && hoverBodyIdx!==selectedPartIdx && glbInfo && glbInfo.bodies[hoverBodyIdx]){
     highlights.push({body:glbInfo.bodies[hoverBodyIdx], color:[0.3,0.8,1.0,0.55]}); // blau für Hover
+  }
+  if(facePickMode && hoverFaceHit && hoverFaceHit.bodyIdx>=0 && glbInfo && glbInfo.bodies[hoverFaceHit.bodyIdx]){
+    highlights.push({body:glbInfo.bodies[hoverFaceHit.bodyIdx], color:[0.2,1.0,0.5,0.45]}); // grün für Fläche
   }
   if(highlights.length>0){
     gl.useProgram(pSphere);
