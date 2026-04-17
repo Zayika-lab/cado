@@ -1097,6 +1097,44 @@ gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 const sphereTriCount=sphereTriVerts.length/3;
 var _sphereScale=0.54; // relativ zur Kamera-Orthogrösse — per Slider änderbar
 
+/* ═══ Material-Palette nach Name ═══
+   Mappt typische CAD-Materialbezeichnungen auf plausible Grundfarben.
+   Fallbacks: baseColorFactor → Standard-Blau. */
+const MATERIAL_PALETTE = [
+  // Metalle
+  [/stahl|steel|iron|eisen|s235|s355|c45/i,        [0.68,0.70,0.73]],
+  [/alum|alu\b|al\b/i,                             [0.82,0.84,0.88]],
+  [/edelstahl|vXa|1\.4\d|stainless|inox/i,         [0.78,0.80,0.84]],
+  [/kupfer|copper/i,                               [0.72,0.45,0.20]],
+  [/messing|brass/i,                               [0.85,0.73,0.38]],
+  [/bronze/i,                                      [0.65,0.45,0.28]],
+  [/zink|zinc/i,                                   [0.70,0.72,0.74]],
+  [/chrom|chrome/i,                                [0.80,0.82,0.84]],
+  [/titan|titanium/i,                              [0.65,0.64,0.66]],
+  [/gold/i,                                        [0.85,0.70,0.30]],
+  [/silber|silver/i,                               [0.80,0.81,0.84]],
+  // Polymere und Gummi
+  [/kunststoff|plastic|abs|pom|pa\b|nylon|pmma/i,  [0.28,0.52,0.82]],
+  [/gummi|rubber|epdm|nbr/i,                       [0.18,0.19,0.21]],
+  [/pvc/i,                                         [0.60,0.60,0.64]],
+  // Natürlich
+  [/holz|wood|eiche|buche|kiefer|oak|pine/i,       [0.55,0.35,0.18]],
+  [/glas|glass/i,                                  [0.70,0.85,0.88]],
+  [/keramik|ceramic/i,                             [0.85,0.84,0.80]],
+  [/beton|concrete/i,                              [0.65,0.65,0.63]],
+];
+function materialColorFromName(mat){
+  if(!mat) return [0.33,0.6,0.93];
+  const nm=(mat.name||'').trim();
+  for(const [re,col] of MATERIAL_PALETTE){
+    if(re.test(nm)) return col;
+  }
+  // Fallback: baseColor falls vorhanden, sonst Standard-Blau
+  if(Array.isArray(mat.baseColor)) return [mat.baseColor[0], mat.baseColor[1], mat.baseColor[2]];
+  return [0.33,0.6,0.93];
+}
+window.materialColorFromName=materialColorFromName;
+
 /* ═══ Matrix-Mathematik ═══ */
 const M4=()=>new Float32Array(16);
 function I4(m){m.fill(0);m[0]=m[5]=m[10]=m[15]=1;return m;}
@@ -2365,14 +2403,9 @@ function render(){
   const vp=mul(proj,view);
   // Generische Schnittebene: discard where -N·p + d < 0 ⟺ N·p > d
   // Wenn Schnitt deaktiviert: (0,0,0,1) — dot = 1 > 0, niemals verwerfen.
-  // Bei customPlane (Fläche als Schnitt gewählt): d leicht in Richtung der gehaltenen
-  // Seite verschieben, damit Dreiecke exakt auf der Ebene (= die ausgewählte Fläche)
-  // mit verworfen werden und nicht sichtbar bleiben.
   let cv4;
   if(cutEnabled){
-    const __N=cutNormal();
-    let __D=cutD();
-    if(customPlane) __D -= (maxDim||1)*0.0008;
+    const __N=cutNormal(), __D=cutD();
     cv4=[-__N[0], -__N[1], -__N[2], __D];
   } else {
     cv4=[0,0,0,1];
@@ -2382,11 +2415,25 @@ function render(){
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
 
-  // Pass 1 übersprungen — Stencil wird pro Teil während Pass 3 aufgebaut,
-  // damit Cap in Material-Farbe des jeweiligen Teils gerendert wird.
+  // Pass 1: Stencil zählen (keine Farb-/Tiefenschreibung)
+  gl.enable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+  gl.colorMask(false,false,false,false);gl.depthMask(false);
+  gl.useProgram(pSten);gl.bindVertexArray(meshVao);
+  gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
+  gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.FRONT);gl.stencilFunc(gl.ALWAYS,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.INCR_WRAP);
+  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  gl.cullFace(gl.BACK);gl.stencilOp(gl.KEEP,gl.KEEP,gl.DECR_WRAP);
+  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  gl.disable(gl.CULL_FACE);
+  gl.colorMask(true,true,true,true);gl.depthMask(true);
+  gl.disable(gl.STENCIL_TEST);
 
   // Pass 2: Geclipptes Modell (Vorderseite, schreibt Tiefe)
-  // Jeden Primitive mit seiner Material-baseColor zeichnen (fallt zurück auf Grau).
+  // Farbwahl: primär nach MATERIAL-NAME aus dem glTF (z.B. "Stahl" → Stahlgrau).
+  // Nur wenn der Name unbekannt ist, Rückfall auf die glTF-baseColor; wenn gar
+  // kein Material vorliegt, das klassische Standard-Blau.
   gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);
   gl.useProgram(pMain);gl.bindVertexArray(meshVao);
   gl.uniformMatrix4fv(gl.getUniformLocation(pMain,'uMVP'),false,vp);
@@ -2396,12 +2443,11 @@ function render(){
     for(const p of glbInfo.parts){
       if(p.triCount===0) continue;
       const mat=p.materialIdx>=0 ? glbInfo.materials[p.materialIdx] : null;
-      const bc=mat ? mat.baseColor : [0.7,0.72,0.76,1];
-      gl.uniform3fv(uCLoc,[bc[0],bc[1],bc[2]]);
+      const col=materialColorFromName(mat);
+      gl.uniform3fv(uCLoc,col);
       gl.drawElements(gl.TRIANGLES, p.triCount*3, gl.UNSIGNED_INT, p.triStart*3*4);
     }
   } else {
-    // Fallback: einfarbiges Rendern wenn keine Material-Info vorliegt
     gl.uniform3fv(uCLoc,[0.33,0.6,0.93]);
     gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
   }
@@ -2461,49 +2507,19 @@ function render(){
   }
   gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
 
-  // Pass 3: Cap pro Teil mit der Material-Farbe dieses Teils.
-  // Für jeden Primitive: Stencil aus geclippten Back/Front-Faces aufbauen → dann
-  // Cap-Quad in der Material-Farbe zeichnen, maskiert durch Stencil.
-  if(cutEnabled && glbInfo && glbInfo.parts && glbInfo.parts.length>0){
-    const capMVP=mul(vp,capMat());
-    gl.enable(gl.STENCIL_TEST);
-    for(const part of glbInfo.parts){
-      if(part.triCount===0) continue;
-      // Stencil für dieses Teil zurücksetzen
-      gl.clearStencil(0);
-      gl.clear(gl.STENCIL_BUFFER_BIT);
-      // Teil-spezifischer Stencil-Pass (nur Back/Front-Faces clipseitig zählen)
-      gl.colorMask(false,false,false,false);gl.depthMask(false);
-      gl.stencilMask(0xff);
-      gl.stencilFunc(gl.ALWAYS,0,0xff);
-      gl.useProgram(pSten);gl.bindVertexArray(meshVao);
-      gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
-      gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
-      gl.enable(gl.CULL_FACE);
-      gl.cullFace(gl.FRONT);gl.stencilOp(gl.KEEP,gl.KEEP,gl.INCR_WRAP);
-      gl.drawElements(gl.TRIANGLES, part.triCount*3, gl.UNSIGNED_INT, part.triStart*3*4);
-      gl.cullFace(gl.BACK);gl.stencilOp(gl.KEEP,gl.KEEP,gl.DECR_WRAP);
-      gl.drawElements(gl.TRIANGLES, part.triCount*3, gl.UNSIGNED_INT, part.triStart*3*4);
-      gl.disable(gl.CULL_FACE);
-      gl.colorMask(true,true,true,true);gl.depthMask(true);
-      // Cap-Quad in Material-Farbe, nur wo Stencil ≠ 0
-      gl.stencilMask(0x00);
-      gl.stencilFunc(gl.NOTEQUAL,0,0xff);
-      gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
-      gl.depthMask(false);
-      gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
-      gl.useProgram(pCap);gl.bindVertexArray(capVao);
-      gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,capMVP);
-      const mat=part.materialIdx>=0 ? glbInfo.materials[part.materialIdx] : null;
-      const bc=mat ? mat.baseColor : [0.7,0.72,0.76,1];
-      gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[bc[0],bc[1],bc[2]]);
-      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-      gl.disable(gl.POLYGON_OFFSET_FILL);
-      gl.depthMask(true);
-    }
-    gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+  // Pass 3 & 4: Cap + Konturlinien bei aktivem Schnitt (unverändert, eine Farbe)
+  if(cutEnabled){
+    gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
+    gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
+    gl.depthMask(false);
+    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
+    gl.useProgram(pCap);gl.bindVertexArray(capVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
+    gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.2,0.78,0.88]);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
 
-    // Konturlinien (schwarz, über allem)
     if(cCount>0){
       gl.useProgram(pLine);gl.bindVertexArray(cVao);
       gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
