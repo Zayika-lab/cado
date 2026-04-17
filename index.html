@@ -48,6 +48,10 @@ canvas{display:block;width:100%;height:100%}
 #logoutBtn{background:transparent;border:1px solid rgba(255,107,107,0.4);color:#ff6b6b;
   border-radius:5px;padding:4px 10px;font:11px system-ui;cursor:pointer}
 #logoutBtn:hover{background:rgba(255,107,107,0.1)}
+
+/* HUD-Kompass (Koordinatensystem) unten links */
+#hud{position:fixed;bottom:10px;left:10px;z-index:15;pointer-events:none;
+  width:130px;height:130px}
 </style></head><body>
 
 <!-- Anmeldebildschirm (zuerst sichtbar) -->
@@ -75,6 +79,10 @@ canvas{display:block;width:100%;height:100%}
   <input type="file" id="fi" accept=".glb" style="display:none">
 </div>
 <div id="info"></div>
+
+<!-- HUD-Koordinatensystem (X/Y/Z-Kompass) -->
+<canvas id="hud" width="130" height="130"></canvas>
+
 <div id="ctrl">
   <div class="sr"><span class="lb">Schnitt</span>
     <input type="range" id="cutR" min="0" max="1" step="0.002" value="0.5">
@@ -316,6 +324,12 @@ layout(location=0) in vec3 aP;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec
 `,`#version 300 es
 precision highp float;uniform vec4 uLC;out vec4 f;void main(){f=uLC;}`);
 
+/* Kugel-Programm: Wireframe-Arcball-Indikator (transparent, ohne Tiefenschreibung) */
+const pSphere=mkP(`#version 300 es
+layout(location=0) in vec3 aP;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec4(aP,1);}
+`,`#version 300 es
+precision highp float;uniform vec4 uSC;out vec4 f;void main(){f=uSC;}`);
+
 /* ═══ Mesh-Zustand ═══ */
 var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
 
@@ -380,6 +394,38 @@ const cVao=gl.createVertexArray();gl.bindVertexArray(cVao);
 const cBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,cBuf);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 var cCount=0;
+
+/* ═══ Wireframe-Kugel (Arcball-Indikator) ═══ */
+// Einheitskugel als Längen- und Breitenlinien
+function genSphereWireframe(nLat,nLon){
+  const v=[];
+  // Breitenkreise
+  for(let i=1;i<nLat;i++){
+    const phi=Math.PI*i/nLat-Math.PI/2, y=Math.sin(phi), r=Math.cos(phi);
+    for(let j=0;j<nLon;j++){
+      const t1=j/nLon*Math.PI*2, t2=(j+1)/nLon*Math.PI*2;
+      v.push(r*Math.cos(t1),y,r*Math.sin(t1), r*Math.cos(t2),y,r*Math.sin(t2));
+    }
+  }
+  // Längenlinien
+  for(let j=0;j<nLon;j++){
+    const t=j/nLon*Math.PI*2;
+    for(let i=0;i<nLat;i++){
+      const p1=Math.PI*i/nLat-Math.PI/2, p2=Math.PI*(i+1)/nLat-Math.PI/2;
+      v.push(
+        Math.cos(p1)*Math.cos(t),Math.sin(p1),Math.cos(p1)*Math.sin(t),
+        Math.cos(p2)*Math.cos(t),Math.sin(p2),Math.cos(p2)*Math.sin(t));
+    }
+  }
+  return new Float32Array(v);
+}
+const sphereVerts=genSphereWireframe(8,16);
+const sphereVao=gl.createVertexArray();gl.bindVertexArray(sphereVao);
+const sphereBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sphereBuf);
+gl.bufferData(gl.ARRAY_BUFFER,sphereVerts,gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+const sphereVertCount=sphereVerts.length/3;
+const sphereScale=0.54; // relativ zur Kamera-Orthogrösse
 
 /* ═══ Matrix-Mathematik ═══ */
 const M4=()=>new Float32Array(16);
@@ -681,6 +727,72 @@ function render(){
     gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0,0,0,1]);
     gl.depthFunc(gl.ALWAYS);gl.drawArrays(gl.LINES,0,cCount);gl.depthFunc(gl.LEQUAL);
   }
+
+  // Pass 5: Arcball-Kugel (wireframe, um den Modellmittelpunkt, rotiert mit arcQ)
+  {
+    const r=q2m(arcQ);
+    // Weltmatrix der Kugel: Skalierung * Rotation (arcQ) * Translation (target)
+    const s=oSize*sphereScale;
+    const sw=new Float32Array(16);
+    sw[0]=r[0]*s;sw[1]=r[1]*s;sw[2]=r[2]*s;sw[3]=0;
+    sw[4]=r[4]*s;sw[5]=r[5]*s;sw[6]=r[6]*s;sw[7]=0;
+    sw[8]=r[8]*s;sw[9]=r[9]*s;sw[10]=r[10]*s;sw[11]=0;
+    sw[12]=target[0];sw[13]=target[1];sw[14]=target[2];sw[15]=1;
+    const smvp=mul(vp,sw);
+    gl.useProgram(pSphere);gl.bindVertexArray(sphereVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,smvp);
+    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.28]);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+    gl.drawArrays(gl.LINES,0,sphereVertCount);
+    gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+  }
+
+  // HUD-Kompass (2D-Canvas oben drüber gezeichnet)
+  drawHUD(arcQ);
 }
+
+/* ═══ HUD-Kompass: X/Y/Z-Achsen rotiert durch arcQ ═══ */
+const hudCvs=document.getElementById('hud');
+const hudCtx=hudCvs.getContext('2d');
+const HUD_S=130;
+// Vektor v durch Quaternion q drehen (Hamilton-Produkt: q * [v,0] * q^-1)
+function qrot(q,v){
+  const[x,y,z,w]=q,[a,b,c]=v;
+  const ix=w*a+y*c-z*b, iy=w*b+z*a-x*c, iz=w*c+x*b-y*a, iw=-x*a-y*b-z*c;
+  return[
+    ix*w + iw*-x + iy*-z - iz*-y,
+    iy*w + iw*-y + iz*-x - ix*-z,
+    iz*w + iw*-z + ix*-y - iy*-x
+  ];
+}
+function drawHUD(q){
+  const cx=HUD_S/2, cy=HUD_S/2, len=42;
+  hudCtx.clearRect(0,0,HUD_S,HUD_S);
+  // Hintergrundkreis
+  hudCtx.beginPath();hudCtx.arc(cx,cy,len+14,0,Math.PI*2);
+  hudCtx.fillStyle='rgba(32,35,42,0.55)';hudCtx.fill();
+  hudCtx.strokeStyle='rgba(74,142,255,0.12)';hudCtx.lineWidth=1;hudCtx.stroke();
+  // Achsen nach Tiefe sortieren (weit hinten zuerst)
+  const ax=[
+    {v:[1,0,0],c:'#ee5544',l:'X'},
+    {v:[0,1,0],c:'#44cc55',l:'Y'},
+    {v:[0,0,1],c:'#4499ff',l:'Z'}
+  ].map(a=>({...a,p:qrot(q,a.v)})).sort((a,b)=>a.p[2]-b.p[2]);
+  for(const a of ax){
+    const px=cx+a.p[0]*len, py=cy-a.p[1]*len;
+    hudCtx.save();
+    hudCtx.globalAlpha=0.3+0.7*((a.p[2]+1)/2);
+    hudCtx.beginPath();hudCtx.moveTo(cx,cy);hudCtx.lineTo(px,py);
+    hudCtx.strokeStyle=a.c;hudCtx.lineWidth=2.5;hudCtx.stroke();
+    hudCtx.beginPath();hudCtx.arc(px,py,3.5,0,Math.PI*2);
+    hudCtx.fillStyle=a.c;hudCtx.fill();
+    hudCtx.font='bold 11px sans-serif';hudCtx.fillStyle=a.c;
+    hudCtx.textAlign='center';hudCtx.textBaseline='middle';
+    hudCtx.fillText(a.l, cx+a.p[0]*(len+13), cy-a.p[1]*(len+13));
+    hudCtx.restore();
+  }
+}
+
 render();
 </script></body></html>
