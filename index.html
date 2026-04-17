@@ -439,7 +439,7 @@ cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0
 document.getElementById('cutR').oninput=e=>{clipT=+e.target.value;document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';lastCA=-1;};
 document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));b.classList.add('on');clipAxis=+b.dataset.a;lastCA=-1;});
 
-/* ═══ GLB-Loader (Binary glTF 2.0) ═══ */
+/* ═══ GLB-Loader (Binary glTF 2.0) – mit voller Node-Hierarchie für Baugruppen ═══ */
 function parseGLB(buf){
   const dv=new DataView(buf);
   const jsonLen=dv.getUint32(12,true);
@@ -468,26 +468,63 @@ function parseGLB(buf){
     return out;
   }
 
-  // Knoten-Transformation (nur Skalierung wird hier berücksichtigt)
-  let scale=1;
-  if(json.nodes&&json.nodes[0]&&json.nodes[0].matrix)scale=json.nodes[0].matrix[0];
-  else if(json.nodes&&json.nodes[0]&&json.nodes[0].scale)scale=json.nodes[0].scale[0];
+  // 4x4-Matrix-Hilfsfunktionen (spaltenweise)
+  function mId(){return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);}
+  function mMul(a,b){
+    const r=new Float32Array(16);
+    for(let i=0;i<4;i++)for(let j=0;j<4;j++){
+      let s=0;for(let k=0;k<4;k++)s+=a[i+k*4]*b[k+j*4];
+      r[i+j*4]=s;
+    }
+    return r;
+  }
+  // Lokale Matrix aus TRS (translation, rotation-quaternion, scale) bauen
+  function mTRS(t,r,s){
+    const tx=(t&&t[0])||0, ty=(t&&t[1])||0, tz=(t&&t[2])||0;
+    const x=(r&&r[0])||0, y=(r&&r[1])||0, z=(r&&r[2])||0, w=r?r[3]:1;
+    const sx=s?s[0]:1, sy=s?s[1]:1, sz=s?s[2]:1;
+    const m=new Float32Array(16);
+    m[0]=(1-2*(y*y+z*z))*sx; m[1]=(2*(x*y+z*w))*sx;    m[2]=(2*(x*z-y*w))*sx;    m[3]=0;
+    m[4]=(2*(x*y-z*w))*sy;    m[5]=(1-2*(x*x+z*z))*sy; m[6]=(2*(y*z+x*w))*sy;    m[7]=0;
+    m[8]=(2*(x*z+y*w))*sz;    m[9]=(2*(y*z-x*w))*sz;    m[10]=(1-2*(x*x+y*y))*sz; m[11]=0;
+    m[12]=tx; m[13]=ty; m[14]=tz; m[15]=1;
+    return m;
+  }
+  function nodeLocalMat(n){
+    if(n.matrix) return new Float32Array(n.matrix);
+    return mTRS(n.translation,n.rotation,n.scale);
+  }
 
   const allP=[],allN=[],allI=[];
   let voff=0;
-  for(const mesh of json.meshes){
+
+  // Mesh mit Weltmatrix verarbeiten (Position + Normale transformieren)
+  function processMesh(meshIdx,W){
+    const mesh=json.meshes[meshIdx];
     for(const prim of mesh.primitives){
       const posAcc=prim.attributes.POSITION;
       const norAcc=prim.attributes.NORMAL;
       const pos=readAcc(posAcc);
       const nor=norAcc!==undefined?readAcc(norAcc):null;
       const nv=accs[posAcc].count;
-      // Skalierung auf Positionen anwenden
       const sp=new Float32Array(nv*3);
-      for(let i=0;i<nv*3;i++)sp[i]=pos[i]*scale;
+      const sn=new Float32Array(nv*3);
+      for(let i=0;i<nv;i++){
+        const x=pos[i*3], y=pos[i*3+1], z=pos[i*3+2];
+        // Position durch Weltmatrix transformieren (inkl. Translation)
+        sp[i*3]  =W[0]*x+W[4]*y+W[8]*z +W[12];
+        sp[i*3+1]=W[1]*x+W[5]*y+W[9]*z +W[13];
+        sp[i*3+2]=W[2]*x+W[6]*y+W[10]*z+W[14];
+        if(nor){
+          const nx=nor[i*3], ny=nor[i*3+1], nz=nor[i*3+2];
+          // Normale nur durch 3x3-Teil transformieren (keine Translation)
+          sn[i*3]  =W[0]*nx+W[4]*ny+W[8]*nz;
+          sn[i*3+1]=W[1]*nx+W[5]*ny+W[9]*nz;
+          sn[i*3+2]=W[2]*nx+W[6]*ny+W[10]*nz;
+        }
+      }
       allP.push(sp);
-      if(nor){const sn=new Float32Array(nv*3);for(let i=0;i<nv*3;i++)sn[i]=nor[i];allN.push(sn);}
-      else{const sn=new Float32Array(nv*3);allN.push(sn);}
+      allN.push(sn);
       if(prim.indices!==undefined){
         const idx=readAcc(prim.indices);
         const si=new Uint32Array(idx.length);
@@ -497,16 +534,36 @@ function parseGLB(buf){
       voff+=nv;
     }
   }
+
+  // Rekursiv durch Szenenbaum laufen und Weltmatrizen akkumulieren
+  function walkNode(nodeIdx,parentMat){
+    const n=json.nodes[nodeIdx];
+    const W=mMul(parentMat,nodeLocalMat(n));
+    if(n.mesh!==undefined)processMesh(n.mesh,W);
+    if(n.children)for(const c of n.children)walkNode(c,W);
+  }
+
+  // Wurzelknoten aus der aktiven Szene
+  const sceneIdx=json.scene!==undefined?json.scene:0;
+  const scene=json.scenes&&json.scenes[sceneIdx];
+  const roots=scene&&scene.nodes?scene.nodes:(json.nodes?json.nodes.map((_,i)=>i):[]);
+  for(const r of roots)walkNode(r,mId());
+
   const P=concat32(allP),N=concat32(allN),I=concatU32(allI);
-  // Fehlende Normalen aus Dreiecken berechnen
-  for(let i=0;i<I.length;i+=3){
-    const i0=I[i],i1=I[i+1],i2=I[i+2];
-    const ax=P[i1*3]-P[i0*3],ay=P[i1*3+1]-P[i0*3+1],az=P[i1*3+2]-P[i0*3+2];
-    const bx=P[i2*3]-P[i0*3],by=P[i2*3+1]-P[i0*3+1],bz=P[i2*3+2]-P[i0*3+2];
-    const nx=ay*bz-az*by,ny=az*bx-ax*bz,nz=ax*by-ay*bx;
-    N[i0*3]+=nx;N[i0*3+1]+=ny;N[i0*3+2]+=nz;
-    N[i1*3]+=nx;N[i1*3+1]+=ny;N[i1*3+2]+=nz;
-    N[i2*3]+=nx;N[i2*3+1]+=ny;N[i2*3+2]+=nz;
+
+  // Fehlende Normalen aus Dreiecken berechnen (nur wenn keine vorhanden)
+  let hasN=false;
+  for(let i=0;i<N.length;i++){if(N[i]!==0){hasN=true;break;}}
+  if(!hasN){
+    for(let i=0;i<I.length;i+=3){
+      const i0=I[i],i1=I[i+1],i2=I[i+2];
+      const ax=P[i1*3]-P[i0*3],ay=P[i1*3+1]-P[i0*3+1],az=P[i1*3+2]-P[i0*3+2];
+      const bx=P[i2*3]-P[i0*3],by=P[i2*3+1]-P[i0*3+1],bz=P[i2*3+2]-P[i0*3+2];
+      const nx=ay*bz-az*by,ny=az*bx-ax*bz,nz=ax*by-ay*bx;
+      N[i0*3]+=nx;N[i0*3+1]+=ny;N[i0*3+2]+=nz;
+      N[i1*3]+=nx;N[i1*3+1]+=ny;N[i1*3+2]+=nz;
+      N[i2*3]+=nx;N[i2*3+1]+=ny;N[i2*3+2]+=nz;
+    }
   }
   for(let i=0;i<N.length;i+=3){const l=Math.sqrt(N[i]**2+N[i+1]**2+N[i+2]**2);if(l>0){N[i]/=l;N[i+1]/=l;N[i+2]/=l;}}
   return{positions:P,normals:N,indices:I};
