@@ -1,7 +1,6 @@
 node_modules/
 test-results/
 playwright-report/
-tests/screens/
 cado-sa.json
 *-sa.json
 *adminsdk*.json
