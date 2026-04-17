@@ -796,16 +796,105 @@ function arcMove(mx,my){
 }
 function arcEnd(){arcOn=false;}
 
+/* ═══ Strahlverfolgung (Pick) für Mittelklick-Aktionen ═══ */
+function rayFromScreen(mx,my){
+  if(!meshLoaded) return null;
+  const rot=q2m(arcQ);
+  const asp=cv.clientWidth/cv.clientHeight;
+  const ndcX=(mx/cv.clientWidth)*2-1, ndcY=-((my/cv.clientHeight)*2-1);
+  const xC=ndcX*oSize*asp, yC=ndcY*oSize;
+  const cd=[rot[8],rot[9],rot[10]];
+  const cp=[target[0]+cd[0]*5000, target[1]+cd[1]*5000, target[2]+cd[2]*5000];
+  const right=[rot[0],rot[1],rot[2]], up=[rot[4],rot[5],rot[6]];
+  const ro=[cp[0]+right[0]*xC+up[0]*yC, cp[1]+right[1]*xC+up[1]*yC, cp[2]+right[2]*xC+up[2]*yC];
+  const rd=[-cd[0],-cd[1],-cd[2]];
+  return {ro,rd};
+}
+function intersectTri(o,d,v0,v1,v2){
+  const e1=[v1[0]-v0[0],v1[1]-v0[1],v1[2]-v0[2]];
+  const e2=[v2[0]-v0[0],v2[1]-v0[1],v2[2]-v0[2]];
+  const p=cross(d,e2), det=dot3(e1,p);
+  if(Math.abs(det)<1e-9) return null;
+  const inv=1/det, tv=[o[0]-v0[0],o[1]-v0[1],o[2]-v0[2]];
+  const u=inv*dot3(tv,p);
+  if(u<0||u>1) return null;
+  const q=cross(tv,e1), v=inv*dot3(d,q);
+  if(v<0||u+v>1) return null;
+  const t=inv*dot3(e2,q);
+  if(t<0) return null;
+  return {t,u,v,point:[o[0]+d[0]*t,o[1]+d[1]*t,o[2]+d[2]*t],e1,e2};
+}
+function pickModel(mx,my){
+  const ray=rayFromScreen(mx,my);
+  if(!ray) return null;
+  const {ro,rd}=ray;
+  let best=null;
+  const nTri=MI.length/3;
+  for(let t=0;t<nTri;t++){
+    const i0=MI[t*3],i1=MI[t*3+1],i2=MI[t*3+2];
+    const v0=[MV[i0*3],MV[i0*3+1],MV[i0*3+2]];
+    const v1=[MV[i1*3],MV[i1*3+1],MV[i1*3+2]];
+    const v2=[MV[i2*3],MV[i2*3+1],MV[i2*3+2]];
+    const h=intersectTri(ro,rd,v0,v1,v2);
+    if(h&&(!best||h.t<best.t)){
+      let n=cross(h.e1,h.e2);
+      const nl=Math.sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+      if(nl>1e-9){ n=[n[0]/nl,n[1]/nl,n[2]/nl]; }
+      if(dot3(n,rd)>0) n=[-n[0],-n[1],-n[2]];
+      best={...h,triIdx:t,v0,v1,v2,normal:n};
+    }
+  }
+  return best;
+}
+
+/* ═══ Mittelklick-Logik: Single = recenter, Doppel = Flächen-Ausrichtung ═══ */
+var __midDown=null, __midMoved=false;
+var __lastMidClick=0, __singleTimer=null;
+const MID_DELAY=300; // ms — Single vs Double unterscheiden
+
+function onSingleMid(mx,my){
+  const h=pickModel(mx,my); if(!h) return;
+  target=[h.point[0],h.point[1],h.point[2]];
+  lastCA=-1;
+}
+function onDoubleMid(mx,my){
+  const h=pickModel(mx,my); if(!h) return;
+  const rot=q2m(arcQ);
+  const cd=[rot[8],rot[9],rot[10]];
+  const dv=cross(cd,h.normal), dw=1+dot3(cd,h.normal);
+  if(Math.abs(dw)>1e-6 || dv[0]*dv[0]+dv[1]*dv[1]+dv[2]*dv[2]>1e-12){
+    const dq=qn([dv[0],dv[1],dv[2],dw]);
+    arcQ=qn(qm(dq,[...arcQ]));
+  }
+  target=[h.point[0],h.point[1],h.point[2]];
+  lastCA=-1;
+}
+function onMidClick(mx,my){
+  const now=performance.now();
+  if(now-__lastMidClick<MID_DELAY && __singleTimer){
+    clearTimeout(__singleTimer); __singleTimer=null; __lastMidClick=0;
+    onDoubleMid(mx,my);
+  } else {
+    __lastMidClick=now;
+    __singleTimer=setTimeout(()=>{ __singleTimer=null; onSingleMid(mx,my); }, MID_DELAY);
+  }
+}
+
 // Pan-Zustand
 var panOn=false, pmx=0, pmy=0, pt0=[0,0,0];
 
 cv.onmousedown=e=>{
   e.preventDefault();
-  if(e.button===1){ arcBegin(e.clientX,e.clientY); }
-  else if(e.button===0){ panOn=true; pmx=e.clientX; pmy=e.clientY; pt0=[...target]; }
+  if(e.button===1){
+    arcBegin(e.clientX,e.clientY);
+    __midDown=[e.clientX,e.clientY]; __midMoved=false;
+  } else if(e.button===0){ panOn=true; pmx=e.clientX; pmy=e.clientY; pt0=[...target]; }
 };
 window.onmousemove=e=>{
-  if(arcOn) arcMove(e.clientX,e.clientY);
+  if(arcOn){
+    arcMove(e.clientX,e.clientY);
+    if(__midDown && Math.hypot(e.clientX-__midDown[0],e.clientY-__midDown[1])>3) __midMoved=true;
+  }
   if(panOn){
     const s=oSize*2/cv.clientHeight;
     const rm=q2m(arcQ);
@@ -814,8 +903,11 @@ window.onmousemove=e=>{
   }
 };
 window.onmouseup=e=>{
-  if(e===undefined||e.button===1) arcEnd();
-  if(e===undefined||e.button===0) panOn=false;
+  if(!e||e.button===1){
+    if(e && arcOn && !__midMoved) onMidClick(e.clientX,e.clientY);
+    arcEnd(); __midDown=null; __midMoved=false;
+  }
+  if(!e||e.button===0) panOn=false;
 };
 cv.oncontextmenu=e=>e.preventDefault();
 cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0.001,Math.min(100,oSize));};
@@ -828,6 +920,8 @@ document.getElementById('sphR').oninput=e=>{
 
 // Test-Hook: Zustand lesen (nur für Playwright-Tests verwendet)
 window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphereScale,arcOn,arcOut});
+window.__pickModel=pickModel;
+window.__MID_DELAY=MID_DELAY;
 
 /* ═══ GLB-Loader (Binary glTF 2.0) – mit voller Node-Hierarchie für Baugruppen ═══ */
 function parseGLB(buf){
