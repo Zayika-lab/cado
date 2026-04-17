@@ -26,6 +26,17 @@ canvas{display:block;width:100%;height:100%}
   background:transparent;color:#5a5a7a;cursor:pointer;font-family:monospace}
 .ab.on{background:rgba(74,142,255,0.2);color:#4a8eff;border-color:#4a8eff}
 
+/* Ein/Aus-Schalter für Schnitt */
+.cutTog{position:relative;display:inline-block;width:32px;height:16px;cursor:pointer;margin:0 4px}
+.cutTog input{opacity:0;width:0;height:0;position:absolute}
+.togKnob{position:absolute;inset:0;background:rgba(74,142,255,0.15);
+  border:1px solid rgba(74,142,255,0.35);border-radius:16px;transition:background 0.15s}
+.togKnob::before{content:'';position:absolute;left:2px;top:1px;width:12px;height:12px;
+  background:#4a8eff;border-radius:50%;transition:left 0.15s}
+.cutTog input:checked + .togKnob{background:rgba(74,142,255,0.5)}
+.cutTog input:checked + .togKnob::before{left:17px}
+#ctrl.cutOff .sr > .vl, #ctrl.cutOff .sr > input[type=range], #ctrl.cutOff .sr > .ab{opacity:0.35;pointer-events:none}
+
 /* Anmeldung-Overlay */
 #auth{position:fixed;inset:0;z-index:100;background:linear-gradient(135deg,#1b1e24 0%,#0f1116 100%);
   display:flex;align-items:center;justify-content:center;flex-direction:column;gap:24px}
@@ -135,7 +146,15 @@ canvas{display:block;width:100%;height:100%}
 
 #fpAxesHead{padding:12px 14px 6px;font-size:11px;text-transform:uppercase;
   letter-spacing:1px;color:#7a8194;font-weight:600;
-  border-top:1px solid rgba(74,142,255,0.1);margin-top:4px}
+  border-top:1px solid rgba(74,142,255,0.1);margin-top:4px;
+  display:flex;justify-content:space-between;align-items:center}
+#axisModeBtn{background:rgba(74,142,255,0.12);border:1px solid rgba(74,142,255,0.35);
+  border-radius:4px;color:#4a8eff;padding:3px 10px;font:11px system-ui;cursor:pointer;
+  text-transform:none;letter-spacing:0}
+#axisModeBtn:hover{background:rgba(74,142,255,0.25)}
+#axisModeBtn.active{background:#4a8eff;color:#fff}
+body.axisMode{cursor:crosshair}
+body.axisMode canvas{cursor:crosshair}
 #fpAxesList{padding:2px 0 10px}
 .axisItem{padding:6px 14px;display:flex;align-items:center;gap:8px;font:12px system-ui;color:#c8ccd4;border-bottom:1px solid rgba(255,255,255,0.03)}
 .axisItem .axLine{width:18px;height:3px;border-radius:2px;flex-shrink:0}
@@ -205,7 +224,9 @@ canvas{display:block;width:100%;height:100%}
   <div id="fpPartsTab" class="fpTabPane">
     <div id="fpPartsHead">Teile des Modells</div>
     <div id="fpPartsList"></div>
-    <div id="fpAxesHead">Erstellte Achsen</div>
+    <div id="fpAxesHead">Erstellte Achsen
+      <button id="axisModeBtn" title="Achse durch Klick auf Zylinderfläche erstellen">⊕ Neu</button>
+    </div>
     <div id="fpAxesList"></div>
   </div>
 </div>
@@ -224,6 +245,7 @@ canvas{display:block;width:100%;height:100%}
 
 <div id="ctrl">
   <div class="sr"><span class="lb">Schnitt</span>
+    <label class="cutTog"><input type="checkbox" id="cutEnable"><span class="togKnob"></span></label>
     <input type="range" id="cutR" min="0" max="1" step="0.002" value="0.5">
     <span class="vl" id="cutV">50%</span>
     <button class="ab" data-a="0" title="Schnittebene senkrecht zur X-Achse">YZ</button>
@@ -851,7 +873,9 @@ function qm(a,b){return[a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],a[3]*b[1]-a[0]*b
 function qn(q){const l=Math.sqrt(q[0]**2+q[1]**2+q[2]**2+q[3]**2);return q.map(x=>x/l);}
 arcQ=qn([Math.sin(0.25),0.12,0.05,Math.cos(0.25)]);
 
-var oSize=1,target=[0,0,0],clipT=0.5,clipAxis=2;
+var oSize=1,target=[0,0,0],clipT=0.5,clipAxis=2,cutEnabled=false;
+// Achsen-Erstellungs-Modus (aktivierbar via Button in der Teile-Panel)
+var axisMode=false, hoverBodyIdx=-1;
 // Benutzerdefinierte Schnittebene (null = axis-aligned mit clipAxis/clipT)
 // Struktur: { normal:[nx,ny,nz], dMin:number, dMax:number, t:number in [0,1] }
 var customPlane=null;
@@ -1216,6 +1240,37 @@ function alignPartTo(axisIdx){
 }
 // alignPartTo bleibt verfügbar für künftige UI (z.B. Rechtsklick-Menü)
 window.__alignPartTo=alignPartTo;
+
+// ═══ Axis-Erstellungs-Modus ═══
+function toggleAxisMode(on){
+  axisMode = on !== undefined ? on : !axisMode;
+  document.body.classList.toggle('axisMode', axisMode);
+  document.getElementById('axisModeBtn').classList.toggle('active', axisMode);
+  if(!axisMode){ hoverBodyIdx=-1; }
+}
+document.getElementById('axisModeBtn').addEventListener('click',()=>toggleAxisMode());
+
+// Bei Bewegung im Achsen-Modus: getroffenen Body ermitteln und Zylinder-Fit testen
+function axisModeHover(mx,my){
+  if(!axisMode||!meshLoaded){ hoverBodyIdx=-1; return; }
+  const hit=pickModel(mx,my);
+  hoverBodyIdx=-1;
+  if(!hit || hit.isCap || hit.triIdx<0) return;
+  const partIdx = glbInfo.parts.findIndex(p=>hit.triIdx>=p.triStart && hit.triIdx<p.triStart+p.triCount);
+  if(partIdx<0) return;
+  const bodyIdx = glbInfo.bodies.findIndex(b=>b.partIndices.includes(partIdx));
+  if(bodyIdx<0) return;
+  const fit=fitCylinderAxis(glbInfo.bodies[bodyIdx]);
+  if(fit && fit.confidence>0.85) hoverBodyIdx=bodyIdx;
+}
+function axisModeClick(mx,my){
+  if(!axisMode||hoverBodyIdx<0) return false;
+  createAxisForBody(hoverBodyIdx);
+  toggleAxisMode(false);
+  return true;
+}
+// ESC beendet Axis-Modus
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && axisMode) toggleAxisMode(false); });
 window.__principalDirection=principalDirection;
 window.setCustomCutFromFace=setCustomCutFromFace;
 window.clearCustomCut=clearCustomCut;
@@ -1223,6 +1278,7 @@ window.fitCylinderAxis=fitCylinderAxis;
 window.createAxisForBody=createAxisForBody;
 window.deleteAxis=deleteAxis;
 window.createdAxes=createdAxes;
+window.toggleAxisMode=toggleAxisMode;
 
 // Welches Part enthält ein bestimmtes Dreieck? Lineare Suche, i.d.R. wenige Teile.
 function partFromTri(triIdx){
@@ -1459,11 +1515,14 @@ var panOn=false, pmx=0, pmy=0, pt0=[0,0,0];
 
 cv.onmousedown=e=>{
   e.preventDefault();
+  // Im Achsen-Modus: linker Klick erstellt die Achse, nichts anderes
+  if(axisMode && e.button===0){
+    if(axisModeClick(e.clientX, e.clientY)) return;
+  }
   if(e.button===1){
     arcBegin(e.clientX,e.clientY);
     __midDown=[e.clientX,e.clientY]; __midMoved=false;
   } else if(e.button===0){
-    // Pan startet sofort mit Drag — Nav-Animation abbrechen, sonst nicht
     cancelNavAnim();
     panOn=true; pmx=e.clientX; pmy=e.clientY; pt0=[...target];
   }
@@ -1471,8 +1530,6 @@ cv.onmousedown=e=>{
 window.onmousemove=e=>{
   if(arcOn){
     if(__midDown && Math.hypot(e.clientX-__midDown[0],e.clientY-__midDown[1])>3 && !__midMoved){
-      // Erster Drag-Schritt der mittleren Taste → von Klick zu Drag umschalten,
-      // laufende Nav-Animation (falls noch aktiv) unterbrechen.
       __midMoved=true; cancelNavAnim();
     }
     arcMove(e.clientX,e.clientY);
@@ -1483,6 +1540,7 @@ window.onmousemove=e=>{
     const dx=(e.clientX-pmx)*s, dy=(e.clientY-pmy)*s;
     target=[pt0[0]-rm[0]*dx+rm[4]*dy, pt0[1]-rm[1]*dx+rm[5]*dy, pt0[2]-rm[2]*dx+rm[6]*dy];
   }
+  if(axisMode) axisModeHover(e.clientX, e.clientY);
 };
 window.onmouseup=e=>{
   if(!e||e.button===1){
@@ -1501,8 +1559,16 @@ document.getElementById('cutR').oninput=e=>{
   const t=+e.target.value;
   if(customPlane){ customPlane.t=t; } else { clipT=t; }
   document.getElementById('cutV').textContent=Math.round(t*100)+'%';
-  lastCustom=null; // generische Kontur neu berechnen
+  lastCustom=null;
 };
+// Schnitt-Aktivierungs-Schalter
+document.getElementById('cutEnable').addEventListener('change',e=>{
+  cutEnabled=e.target.checked;
+  document.getElementById('ctrl').classList.toggle('cutOff', !cutEnabled);
+  if(cutEnabled) lastCustom=null; // Kontur beim Einschalten neu berechnen
+});
+// Initialzustand: Schnitt aus
+document.getElementById('ctrl').classList.add('cutOff');
 document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));
   b.classList.add('on');
@@ -1759,7 +1825,7 @@ function render(){
   requestAnimationFrame(render);resize();
   if(!meshLoaded)return;
   applyNavAnim();
-  updateCut();
+  if(cutEnabled) updateCut();
   const asp=cv.width/cv.height,rot=q2m(arcQ);
   const cd=[rot[8],rot[9],rot[10]];
   const cp=[target[0]+cd[0]*5000,target[1]+cd[1]*5000,target[2]+cd[2]*5000];
@@ -1770,8 +1836,14 @@ function render(){
   const proj=ortho(-oSize*asp,oSize*asp,-oSize,oSize,1,100000);
   const vp=mul(proj,view);
   // Generische Schnittebene: discard where -N·p + d < 0 ⟺ N·p > d
-  const __N=cutNormal(), __D=cutD();
-  const cv4=[-__N[0], -__N[1], -__N[2], __D];
+  // Wenn Schnitt deaktiviert: (0,0,0,1) — dot = 1 > 0, niemals verwerfen
+  let cv4;
+  if(cutEnabled){
+    const __N=cutNormal(), __D=cutD();
+    cv4=[-__N[0], -__N[1], -__N[2], __D];
+  } else {
+    cv4=[0,0,0,1];
+  }
 
   gl.clearColor(0.106,0.118,0.141,1);
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
@@ -1816,39 +1888,48 @@ function render(){
     gl.depthFunc(gl.LEQUAL);
   }
 
-  // Pass 2.5: Hervorhebung des ausgewählten Körpers (alle seine Primitive)
+  // Pass 2.5: Hervorhebung des ausgewählten Körpers + Hover im Axis-Mode
+  const highlights=[];
   if(selectedPartIdx>=0 && glbInfo && glbInfo.bodies[selectedPartIdx]){
-    const b=glbInfo.bodies[selectedPartIdx];
-    if(b.triCount>0){
-      gl.useProgram(pSphere);
-      gl.bindVertexArray(meshVao);
-      gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
-      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[1.0,0.55,0.1,0.55]);
-      gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-      gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
-      gl.drawElements(gl.TRIANGLES, b.triCount*3, gl.UNSIGNED_INT, b.triStart*3*4);
-      gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+    highlights.push({body:glbInfo.bodies[selectedPartIdx], color:[1.0,0.55,0.1,0.55]});
+  }
+  if(axisMode && hoverBodyIdx>=0 && hoverBodyIdx!==selectedPartIdx && glbInfo && glbInfo.bodies[hoverBodyIdx]){
+    highlights.push({body:glbInfo.bodies[hoverBodyIdx], color:[0.3,0.8,1.0,0.55]}); // blau für Hover
+  }
+  if(highlights.length>0){
+    gl.useProgram(pSphere);
+    gl.bindVertexArray(meshVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+    for(const h of highlights){
+      if(h.body.triCount>0){
+        gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),h.color);
+        gl.drawElements(gl.TRIANGLES, h.body.triCount*3, gl.UNSIGNED_INT, h.body.triStart*3*4);
+      }
     }
+    gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
   }
 
-  // Pass 3: Cap (Schnittfläche) – stencil!=0, Tiefentest an, Tiefe nicht schreiben
-  gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
-  gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
-  gl.depthMask(false);
-  gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
-  gl.useProgram(pCap);gl.bindVertexArray(capVao);
-  gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
-  gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.2,0.78,0.88]);
-  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-  gl.disable(gl.POLYGON_OFFSET_FILL);
-  gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+  // Pass 3 & 4 (Cap + Kontur) nur bei aktiviertem Schnitt
+  if(cutEnabled){
+    gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
+    gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
+    gl.depthMask(false);
+    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
+    gl.useProgram(pCap);gl.bindVertexArray(capVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
+    gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.2,0.78,0.88]);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
 
-  // Pass 4: Konturlinien (immer über dem Modell sichtbar)
-  if(cCount>0){
-    gl.useProgram(pLine);gl.bindVertexArray(cVao);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
-    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0,0,0,1]);
-    gl.depthFunc(gl.ALWAYS);gl.drawArrays(gl.LINES,0,cCount);gl.depthFunc(gl.LEQUAL);
+    if(cCount>0){
+      gl.useProgram(pLine);gl.bindVertexArray(cVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
+      gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0,0,0,1]);
+      gl.depthFunc(gl.ALWAYS);gl.drawArrays(gl.LINES,0,cCount);gl.depthFunc(gl.LEQUAL);
+    }
   }
 
   // Pass 5: Arcball-Kugel — in KAMERA-Raum gerendert, damit die Rotation (arcQ)
