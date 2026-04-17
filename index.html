@@ -708,17 +708,29 @@ resize();window.addEventListener('resize',resize);
 function mkS(t,s){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(sh));return sh;}
 function mkP(v,f){const p=gl.createProgram();gl.attachShader(p,mkS(gl.VERTEX_SHADER,v));gl.attachShader(p,mkS(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);return p;}
 
-/* Hauptprogramm: beleuchtetes Modell mit Clipping */
+/* Hauptprogramm: beleuchtetes Modell mit Clipping — Half-Lambert 3-Punkt-Licht
+   + Rim für weiche CAD-Darstellung mit gradient-Schattierung statt harter Kanten. */
 const pMain=mkP(`#version 300 es
 layout(location=0) in vec3 aP;layout(location=1) in vec3 aN;
 uniform mat4 uMVP;out vec3 vN,vW;
 void main(){vW=aP;vN=aN;gl_Position=uMVP*vec4(aP,1);}
 `,`#version 300 es
 precision highp float;uniform vec4 uClip;uniform vec3 uC;in vec3 vN,vW;out vec4 f;
-void main(){if(dot(vec4(vW,1),uClip)<0.)discard;
+float hl(vec3 n, vec3 l){ return pow(max(dot(n,l)*0.5+0.5, 0.0), 1.6); }
+void main(){
+  if(dot(vec4(vW,1),uClip)<0.)discard;
   vec3 n=normalize(gl_FrontFacing?vN:-vN);
-  float d=max(dot(n,normalize(vec3(1,.8,.5))),0.)*.55+max(dot(n,normalize(vec3(-.5,-.3,-.5))),0.)*.2;
-  f=vec4(uC*(.32+d),1);}`);
+  // 3-Punkt-Licht (Key + Fill + Back) mit Half-Lambert für weichen Übergang
+  float lKey  = hl(n, normalize(vec3( 0.55, 0.70, 0.45)));
+  float lFill = hl(n, normalize(vec3(-0.65, 0.25, 0.35)));
+  float lBack = hl(n, normalize(vec3( 0.10,-0.35,-0.80)));
+  float amb = 0.22;
+  float diffuse = lKey*0.52 + lFill*0.24 + lBack*0.12;
+  // Sanfter Rim-Highlight an den Silhouetten für Volumengefühl
+  float rim = pow(1.0 - max(dot(n, vec3(0.0,0.0,1.0)), 0.0), 2.5) * 0.12;
+  vec3 col = uC * (amb + diffuse) + vec3(rim);
+  f = vec4(col, 1);
+}`);
 
 /* Stencil-Programm: nur Schablone schreiben, kein Farbausgang */
 const pSten=mkP(`#version 300 es
@@ -786,6 +798,48 @@ function computeTriangleGeometry(){
     }
   }
 }
+// Feature-Kanten für CAD-Umrisse: Boundary-Kanten + Knick-Kanten (Dot-Produkt < 0.95).
+// Auf diese Weise werden glatte Flächen nicht überzeichnet, nur Silhouette und
+// charakteristische Knicke (Bohrungen, Kanten, Flächen-Abschlüsse).
+var featureEdgeVao=null, featureEdgeBuf=null, featureEdgeCount=0;
+function buildFeatureEdges(){
+  if(!MI||!triAdj||!triNormals) return;
+  const seen=new Set();
+  const lines=[];
+  const nTri=MI.length/3;
+  for(let t=0;t<nTri;t++){
+    const v=[MI[t*3], MI[t*3+1], MI[t*3+2]];
+    for(let k=0;k<3;k++){
+      const a=v[k], b=v[(k+1)%3];
+      const n=triAdj[t*3+k];
+      let keep=false;
+      if(n<0) keep=true; // Randkante
+      else if(n>t){
+        const d=triNormals[t*3]*triNormals[n*3]+triNormals[t*3+1]*triNormals[n*3+1]+triNormals[t*3+2]*triNormals[n*3+2];
+        if(d<0.95) keep=true; // Knickkante
+      } else continue; // schon durch kleineren t-Index behandelt
+      if(!keep) continue;
+      const keyA=Math.min(a,b), keyB=Math.max(a,b);
+      const key=keyA+'_'+keyB;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      lines.push(MV[a*3],MV[a*3+1],MV[a*3+2], MV[b*3],MV[b*3+1],MV[b*3+2]);
+    }
+  }
+  if(!featureEdgeBuf){ featureEdgeBuf=gl.createBuffer(); }
+  if(!featureEdgeVao){
+    featureEdgeVao=gl.createVertexArray();
+    gl.bindVertexArray(featureEdgeVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, featureEdgeBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  }
+  const arr=new Float32Array(lines);
+  gl.bindBuffer(gl.ARRAY_BUFFER, featureEdgeBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW);
+  featureEdgeCount=arr.length/3;
+}
+
 // Flood-Fill: alle Dreiecke im "glatten" Gebiet um startTri (cos(Winkel) ≥ threshold)
 function floodSmoothRegion(startTri, threshold){
   const region=new Set();
@@ -990,6 +1044,7 @@ function uploadMesh(positions,normals,indices){
   oSize=maxDim*0.65;
   meshLoaded=true;
   computeTriangleGeometry(); // Adjazenz + Normalen für Flächen-Flood-Fill
+  buildFeatureEdges();       // CAD-Umrisse (Silhouette + Knickkanten)
   lastCA=-1;
   document.getElementById('ctrl').style.display='flex';
   document.getElementById('drop').classList.add('hide');
@@ -2462,7 +2517,7 @@ function render(){
     gl.useProgram(pLine);
     gl.bindVertexArray(planeVao);
     gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
-    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[1,1,1,0.9]);
+    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0.55,0.56,0.58,0.9]);
     gl.depthFunc(gl.ALWAYS);
     gl.lineWidth(1.5);
     for(let i=0;i<createdPlanes.length;i++){
@@ -2483,6 +2538,22 @@ function render(){
       gl.drawArrays(gl.LINES, i*2, 2);
     }
     gl.depthFunc(gl.LEQUAL);
+  }
+
+  // Pass 2.4: Feature-Kanten über dem Modell (CAD-Umrisse: Silhouetten + Knicke).
+  // Geclippt dank derselben uClip, leicht dunkler als das Modell, mit Tiefen-Test
+  // damit verdeckte Kanten auch verdeckt bleiben.
+  if(featureEdgeVao && featureEdgeCount>0){
+    gl.useProgram(pLine);
+    gl.bindVertexArray(featureEdgeVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
+    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0.05,0.07,0.10,0.85]);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(-1,-1);
+    gl.drawArrays(gl.LINES, 0, featureEdgeCount);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.depthMask(true);gl.disable(gl.BLEND);
   }
 
   // Pass 2.5: Hervorhebung — ausgewählter Body (orange, alle Primitives) und
