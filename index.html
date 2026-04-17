@@ -257,8 +257,10 @@ canvas{display:block;width:100%;height:100%}
       try { await idbPut(currentUser.uid, latest.data.filename, buf); } catch {}
       if (window.__loadGLBBuffer) window.__loadGLBBuffer(latest.data.filename, buf);
     } catch (e) {
-      console.error('Server-Wiederherstellen fehlgeschlagen:', e);
-      if (info) info.textContent = 'Server nicht erreichbar (' + (e.code || e.message) + ')';
+      // Server-Fehler (z. B. CORS) sind nicht kritisch – lokaler Cache reicht meist.
+      // In der Konsole als Warnung statt Fehler ausgeben.
+      console.warn('Server-Wiederherstellen übersprungen:', e.code || e.message);
+      if (info) info.textContent = '';
     }
   }
 
