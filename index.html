@@ -193,24 +193,31 @@ canvas{display:block;width:100%;height:100%}
 
   // Lädt das zuletzt hochgeladene GLB (nach Anmeldung)
   async function loadLatestGLB() {
+    const info = document.getElementById('info');
     try {
+      if (info) info.textContent = 'Suche gespeicherte Datei...';
       // Nur eigene Einträge abfragen; Sortierung clientseitig → keine Composite-Index nötig
       const q = query(collection(db, 'glb_loads'), where('uid', '==', currentUser.uid));
       const snap = await getDocs(q);
-      if (snap.empty) return;
+      if (snap.empty) { if (info) info.textContent = ''; return; }
+      // Nur Einträge mit storagePath berücksichtigen; neuesten auswählen
       let latest = null;
       snap.forEach(d => {
         const data = d.data();
+        if (!data.storagePath) return;
         const ts = data.createdAt && data.createdAt.seconds ? data.createdAt.seconds : 0;
         if (!latest || ts > latest.ts) latest = { ts, data };
       });
-      if (!latest || !latest.data.storagePath) return;
+      if (!latest) { if (info) info.textContent = ''; return; }
+      if (info) info.textContent = 'Lade ' + latest.data.filename + ' vom Server...';
       const url = await getDownloadURL(sRef(storage, latest.data.storagePath));
       const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const buf = await resp.arrayBuffer();
       if (window.__loadGLBBuffer) window.__loadGLBBuffer(latest.data.filename, buf);
     } catch (e) {
-      console.warn('Wiederherstellen fehlgeschlagen:', e);
+      console.error('Wiederherstellen fehlgeschlagen:', e);
+      if (info) info.textContent = 'Wiederherstellen fehlgeschlagen: ' + (e.code || e.message);
     }
   }
 
