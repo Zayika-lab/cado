@@ -1039,10 +1039,16 @@ function showGlbPopup(mx,my){
   if(!meshLoaded||!glbInfo){ hideGlbPopup(); return; }
   const pop=document.getElementById('glbPop');
   const hit=pickModel(mx,my);
-  const part=hit ? partFromTri(hit.triIdx) : null;
+  const part=hit && !hit.isCap ? partFromTri(hit.triIdx) : null;
   const mat=part && part.materialIdx>=0 ? glbInfo.materials[part.materialIdx] : null;
   const rows=[];
-  if(part){
+  if(hit && hit.isCap){
+    const planeLabel=['YZ','XZ','XY'][clipAxis];
+    rows.push('<h4>Schnittfläche</h4>');
+    rows.push(`<div class="row"><span class="k">Ebene</span><span class="v">${planeLabel}</span></div>`);
+    rows.push(`<div class="row"><span class="k">Position</span><span class="v">${hit.point[clipAxis].toFixed(3)}</span></div>`);
+    rows.push('<hr>');
+  } else if(part){
     rows.push('<h4>Teil</h4>');
     rows.push(`<div class="row"><span class="k">Name</span><span class="v" title="${part.name}">${part.name}</span></div>`);
     rows.push(`<div class="row"><span class="k">Dreiecke</span><span class="v">${part.triCount}</span></div>`);
@@ -1084,23 +1090,58 @@ function pickModel(mx,my){
   const ray=rayFromScreen(mx,my);
   if(!ray) return null;
   const {ro,rd}=ray;
-  let best=null;
   const nTri=MI.length/3;
+  // Shader-Clipping: Dreieck verworfen wenn coord[clipAxis] > clipVal()
+  // (Cap = Fläche, wo coord[clipAxis] == clipVal() und wir sonst im Inneren wären)
+  const cv=clipVal();
+  // Alle Schnittpunkte sammeln
+  const hits=[];
   for(let t=0;t<nTri;t++){
     const i0=MI[t*3],i1=MI[t*3+1],i2=MI[t*3+2];
     const v0=[MV[i0*3],MV[i0*3+1],MV[i0*3+2]];
     const v1=[MV[i1*3],MV[i1*3+1],MV[i1*3+2]];
     const v2=[MV[i2*3],MV[i2*3+1],MV[i2*3+2]];
     const h=intersectTri(ro,rd,v0,v1,v2);
-    if(h&&(!best||h.t<best.t)){
+    if(h){
       let n=cross(h.e1,h.e2);
       const nl=Math.sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
       if(nl>1e-9){ n=[n[0]/nl,n[1]/nl,n[2]/nl]; }
       if(dot3(n,rd)>0) n=[-n[0],-n[1],-n[2]];
-      best={...h,triIdx:t,v0,v1,v2,normal:n};
+      const kept=h.point[clipAxis]<=cv;
+      hits.push({...h,triIdx:t,v0,v1,v2,normal:n,kept});
     }
   }
-  return best;
+  hits.sort((a,b)=>a.t-b.t);
+
+  // Cap-Ebenenschnittpunkt: coord[clipAxis] == cv
+  let tCap=Infinity, capPt=null;
+  if(Math.abs(rd[clipAxis])>1e-9){
+    const tc=(cv-ro[clipAxis])/rd[clipAxis];
+    if(tc>0){
+      const p=[ro[0]+rd[0]*tc, ro[1]+rd[1]*tc, ro[2]+rd[2]*tc];
+      // Nur gültig, wenn im Bounding-Box (also im Querschnitt des Modells liegt)
+      let inBB=true;
+      for(let a=0;a<3;a++){
+        if(a===clipAxis) continue;
+        if(p[a]<bMin[a]-1e-6||p[a]>bMax[a]+1e-6){inBB=false;break;}
+      }
+      if(inBB){ tCap=tc; capPt=p; }
+    }
+  }
+
+  // Innen-Test am Cap: Anzahl Dreiecke vor tCap (ungerade → ray ist im Modell)
+  let before=0;
+  for(const h of hits){ if(h.t<tCap) before++; else break; }
+  const firstKept=hits.find(h=>h.kept);
+  const insideAtCap=(before%2)===1;
+
+  // Cap sichtbar dort, wo wir innen sind UND Cap näher als erstes sichtbares Dreieck
+  if(capPt && insideAtCap && (!firstKept || tCap<firstKept.t)){
+    let nAxis=[0,0,0]; nAxis[clipAxis]=1;
+    if(dot3(nAxis,rd)>0) nAxis[clipAxis]=-1;
+    return {t:tCap, point:capPt, normal:nAxis, triIdx:-1, isCap:true};
+  }
+  return firstKept || null;
 }
 
 /* ═══ Mittelklick-Logik: Single = recenter, Doppel = Flächen-Ausrichtung ═══ */
