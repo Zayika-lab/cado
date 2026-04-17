@@ -37,9 +37,9 @@ test('single middle-click on model recenters target after 0.3s', async ({ page }
 
   // Click slightly off-center, which should hit the triangle
   await midClick(page, 700, 420);
-  // Single-click is delayed by SINGLE_DELAY (100ms) + anim (220ms). No second
-  // click means the single fires after SINGLE_DELAY.
-  await page.waitForTimeout(450);
+  // Single-click is delayed by CLICK_DELAY (220ms) + anim (220ms). No second
+  // click means the single fires after CLICK_DELAY.
+  await page.waitForTimeout(550);
 
   const s1 = await page.evaluate(() => window.__state());
   const moved = Math.hypot(s1.target[0]-s0.target[0], s1.target[1]-s0.target[1], s1.target[2]-s0.target[2]);
@@ -81,7 +81,7 @@ test('middle-drag does NOT trigger recenter', async ({ page }) => {
   await page.mouse.down({ button: 'middle' });
   await page.mouse.move(700, 440, { steps: 8 });
   await page.mouse.up({ button: 'middle' });
-  await page.waitForTimeout(250); // wait past MID_DELAY
+  await page.waitForTimeout(400); // wait past CLICK_DELAY + anim
 
   const s1 = await page.evaluate(() => window.__state());
   const moved = Math.hypot(s1.target[0]-s0.target[0], s1.target[1]-s0.target[1], s1.target[2]-s0.target[2]);

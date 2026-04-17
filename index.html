@@ -854,8 +854,9 @@ function pickModel(mx,my){
 /* ═══ Mittelklick-Logik: Single = recenter, Doppel = Flächen-Ausrichtung ═══ */
 var __midDown=null, __midMoved=false;
 var __lastMidClick=0, __singleTimer=null;
-const SINGLE_DELAY=100;    // ms — Verzögerung bis Single-Click-Aktion feuert
-const DOUBLE_WINDOW=300;   // ms — zweiter Klick innerhalb dieses Fensters = Doppelklick
+// Ein Wert für beides: Single-Click feuert erst NACH dem Doppelklick-Fenster,
+// damit nie beides gleichzeitig passiert (keine "mal so, mal so"-Instabilität).
+const CLICK_DELAY=220;     // ms — Single-Click-Verzögerung == Doppelklick-Fenster
 const NAV_ANIM_DUR=220;    // ms — weicher Übergang bei recenter/face-align
 
 // Quaternion-SLERP (Sphärische lineare Interpolation)
@@ -914,16 +915,13 @@ function onDoubleMid(mx,my){
 }
 function onMidClick(mx,my){
   const now=performance.now();
-  if(now-__lastMidClick<DOUBLE_WINDOW){
-    // Zweiter Klick innerhalb des Doppelklick-Fensters — Single-Timer (falls noch
-    // anhängig) abbrechen und Face-Align starten. Eine bereits laufende Single-
-    // Click-Animation wird von der neuen Doppelklick-Animation weich übernommen.
-    if(__singleTimer){ clearTimeout(__singleTimer); __singleTimer=null; }
-    __lastMidClick=0;
+  if(__singleTimer && now-__lastMidClick<CLICK_DELAY){
+    // Zweiter Klick, bevor Single gefeuert hat → Doppelklick (Single abbrechen).
+    clearTimeout(__singleTimer); __singleTimer=null; __lastMidClick=0;
     onDoubleMid(mx,my);
   } else {
     __lastMidClick=now;
-    __singleTimer=setTimeout(()=>{ __singleTimer=null; onSingleMid(mx,my); }, SINGLE_DELAY);
+    __singleTimer=setTimeout(()=>{ __singleTimer=null; onSingleMid(mx,my); }, CLICK_DELAY);
   }
 }
 
@@ -978,8 +976,7 @@ window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphere
   navAnim: navAnim?{t0:navAnim.t0,dur:navAnim.dur,qE:[...navAnim.qE],tE:[...navAnim.tE]}:null,
   lastMid:__lastMidClick, hasTimer:!!__singleTimer});
 window.__pickModel=pickModel;
-window.__SINGLE_DELAY=SINGLE_DELAY;
-window.__DOUBLE_WINDOW=DOUBLE_WINDOW;
+window.__CLICK_DELAY=CLICK_DELAY;
 window.__forceDoubleMid=onDoubleMid; // for tests only
 window.__onMidClick=onMidClick;      // for tests only
 
