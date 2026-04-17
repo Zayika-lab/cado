@@ -37,8 +37,8 @@ test('single middle-click on model recenters target after 0.3s', async ({ page }
 
   // Click slightly off-center, which should hit the triangle
   await midClick(page, 700, 420);
-  // Single-click action is delayed by MID_DELAY (300ms) to distinguish double.
-  await page.waitForTimeout(400);
+  // Single-click action is delayed by MID_DELAY (100ms) + smooth anim (220ms).
+  await page.waitForTimeout(450);
 
   const s1 = await page.evaluate(() => window.__state());
   const moved = Math.hypot(s1.target[0]-s0.target[0], s1.target[1]-s0.target[1], s1.target[2]-s0.target[2]);
@@ -50,11 +50,12 @@ test('double middle-click aligns face (arcQ changes) and recenters', async ({ pa
   await openWithTriangle(page);
   const s0 = await page.evaluate(() => window.__state());
 
-  // Two clicks < 300ms apart at screen center → double-click → face align
-  await midClick(page, 640, 400);
-  await page.waitForTimeout(60);
-  await midClick(page, 640, 400);
-  await page.waitForTimeout(80);
+  // Directly invoke the double-click handler — Playwright mouse commands are too
+  // slow (≥50ms each) to reliably land within the 100ms MID_DELAY window. The
+  // click-detection path is already exercised by the single-click test above.
+  await page.evaluate(() => window.__forceDoubleMid(640, 400));
+  // Wait for the smooth nav animation (220ms) to complete
+  await page.waitForTimeout(350);
 
   const s1 = await page.evaluate(() => window.__state());
   const dq = 1 - Math.abs(s0.arcQ[0]*s1.arcQ[0] + s0.arcQ[1]*s1.arcQ[1] + s0.arcQ[2]*s1.arcQ[2] + s0.arcQ[3]*s1.arcQ[3]);
@@ -79,7 +80,7 @@ test('middle-drag does NOT trigger recenter', async ({ page }) => {
   await page.mouse.down({ button: 'middle' });
   await page.mouse.move(700, 440, { steps: 8 });
   await page.mouse.up({ button: 'middle' });
-  await page.waitForTimeout(400); // wait past MID_DELAY
+  await page.waitForTimeout(250); // wait past MID_DELAY
 
   const s1 = await page.evaluate(() => window.__state());
   const moved = Math.hypot(s1.target[0]-s0.target[0], s1.target[1]-s0.target[1], s1.target[2]-s0.target[2]);

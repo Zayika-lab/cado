@@ -776,22 +776,27 @@ function arcMove(mx,my){
     else       arc_v0=shoemake(mx,my,arc_cx,arc_cy,arc_r);
     return;
   }
+  // Hinweis: arcQ repräsentiert Kamera-Orientierung; view = rot(arcQ)^T.
+  // Damit das Modell (und die Kugel) der Maus FOLGEN, wenden wir dq^{-1} von
+  // rechts auf arc_q0 an (Objekt-Manipulations-Feeling statt Kamera-Orbit).
   if(arcOut){
     // Ausserhalb: Rotation um die Bildschirmnormale (Kamera-+Z in Welt)
     const angle=Math.atan2(-(my-arc_cy),mx-arc_cx);
     const delta=wrapDelta(angle-arc_startAngle);
     const R=q2m(arc_q0);
     const ax=[R[8],R[9],R[10]];
-    const h=delta*0.5, s=Math.sin(h);
-    const dq=[ax[0]*s,ax[1]*s,ax[2]*s,Math.cos(h)];
-    arcQ=qn(qm(dq,arc_q0));
+    // Negiertes delta → dq^{-1} für die Achse ax
+    const h=-delta*0.5, s=Math.sin(h);
+    const dqInv=[ax[0]*s,ax[1]*s,ax[2]*s,Math.cos(h)];
+    arcQ=qn(qm(arc_q0,dqInv));
   } else {
-    // Innen: Shoemake-Trackball
+    // Innen: Shoemake-Trackball — dq^{-1} von rechts (Konjugat für Einheitsquaternion)
     const v1=shoemake(mx,my,arc_cx,arc_cy,arc_r);
     const cr=cross(arc_v0,v1), d=dot3(arc_v0,v1);
     const l2=cr[0]*cr[0]+cr[1]*cr[1]+cr[2]*cr[2];
     if(l2<1e-12) return;
-    arcQ=qn(qm([cr[0],cr[1],cr[2],1+d],arc_q0));
+    const dq=qn([cr[0],cr[1],cr[2],1+d]);
+    arcQ=qn(qm(arc_q0,[-dq[0],-dq[1],-dq[2],dq[3]]));
   }
 }
 function arcEnd(){arcOn=false;}
@@ -850,23 +855,61 @@ function pickModel(mx,my){
 /* ═══ Mittelklick-Logik: Single = recenter, Doppel = Flächen-Ausrichtung ═══ */
 var __midDown=null, __midMoved=false;
 var __lastMidClick=0, __singleTimer=null;
-const MID_DELAY=300; // ms — Single vs Double unterscheiden
+const MID_DELAY=100;       // ms — Single vs Double unterscheiden
+const NAV_ANIM_DUR=220;    // ms — weicher Übergang bei recenter/face-align
+
+// Quaternion-SLERP (Sphärische lineare Interpolation)
+function slerp(a,b,t){
+  let d=a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3];
+  let bb=b;
+  if(d<0){d=-d;bb=[-b[0],-b[1],-b[2],-b[3]];}
+  if(d>0.9995){
+    return qn([a[0]+t*(bb[0]-a[0]),a[1]+t*(bb[1]-a[1]),a[2]+t*(bb[2]-a[2]),a[3]+t*(bb[3]-a[3])]);
+  }
+  const th0=Math.acos(d), th=th0*t, s=Math.sin(th), s0=Math.sin(th0);
+  const c0=Math.cos(th)-d*s/s0, c1=s/s0;
+  return [c0*a[0]+c1*bb[0], c0*a[1]+c1*bb[1], c0*a[2]+c1*bb[2], c0*a[3]+c1*bb[3]];
+}
+// Nav-Animation: target/arcQ weich von Start→Ende interpolieren
+var navAnim=null;
+function startNavAnim(newTarget,newQ){
+  navAnim={
+    tS:[...target], tE:newTarget?[...newTarget]:[...target],
+    qS:[...arcQ],   qE:newQ?[...newQ]:[...arcQ],
+    t0:performance.now(), dur:NAV_ANIM_DUR
+  };
+}
+function applyNavAnim(){
+  if(!navAnim) return;
+  const p=Math.min(1,(performance.now()-navAnim.t0)/navAnim.dur);
+  const e=1-Math.pow(1-p,3); // ease-out cubic
+  for(let i=0;i<3;i++) target[i]=navAnim.tS[i]+(navAnim.tE[i]-navAnim.tS[i])*e;
+  arcQ=slerp(navAnim.qS,navAnim.qE,e);
+  if(p>=1) navAnim=null;
+}
+function cancelNavAnim(){ navAnim=null; }
 
 function onSingleMid(mx,my){
   const h=pickModel(mx,my); if(!h) return;
-  target=[h.point[0],h.point[1],h.point[2]];
+  startNavAnim([h.point[0],h.point[1],h.point[2]], null);
   lastCA=-1;
 }
 function onDoubleMid(mx,my){
   const h=pickModel(mx,my); if(!h) return;
-  const rot=q2m(arcQ);
-  const cd=[rot[8],rot[9],rot[10]];
-  const dv=cross(cd,h.normal), dw=1+dot3(cd,h.normal);
-  if(Math.abs(dw)>1e-6 || dv[0]*dv[0]+dv[1]*dv[1]+dv[2]*dv[2]>1e-12){
-    const dq=qn([dv[0],dv[1],dv[2],dw]);
-    arcQ=qn(qm(dq,[...arcQ]));
+  // Konsistent mit dem neuen (q0 * dq^{-1})-Schema: arcQ_new = arcQ * r, wobei
+  // r (0,0,1) auf cs_normal (Flächennormale in Kamera-Koord.) dreht.
+  // Nach der Rotation ist col2 von rot(arcQ_new) = h.normal, also view*normal = (0,0,1).
+  const rotM=q2m(arcQ);
+  const csnx=rotM[0]*h.normal[0]+rotM[1]*h.normal[1]+rotM[2]*h.normal[2];
+  const csny=rotM[4]*h.normal[0]+rotM[5]*h.normal[1]+rotM[6]*h.normal[2];
+  const csnz=rotM[8]*h.normal[0]+rotM[9]*h.normal[1]+rotM[10]*h.normal[2];
+  const rv=[-csny,csnx,0], rw=1+csnz;
+  let newQ=[...arcQ];
+  if(Math.abs(rw)>1e-6 || rv[0]*rv[0]+rv[1]*rv[1]>1e-12){
+    const rq=qn([rv[0],rv[1],rv[2],rw]);
+    newQ=qn(qm([...arcQ],rq));
   }
-  target=[h.point[0],h.point[1],h.point[2]];
+  startNavAnim([h.point[0],h.point[1],h.point[2]], newQ);
   lastCA=-1;
 }
 function onMidClick(mx,my){
@@ -885,6 +928,7 @@ var panOn=false, pmx=0, pmy=0, pt0=[0,0,0];
 
 cv.onmousedown=e=>{
   e.preventDefault();
+  cancelNavAnim(); // Benutzeraktion bricht laufende Nav-Animation ab
   if(e.button===1){
     arcBegin(e.clientX,e.clientY);
     __midDown=[e.clientX,e.clientY]; __midMoved=false;
@@ -919,9 +963,12 @@ document.getElementById('sphR').oninput=e=>{
 };
 
 // Test-Hook: Zustand lesen (nur für Playwright-Tests verwendet)
-window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphereScale,arcOn,arcOut});
+window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphereScale,arcOn,arcOut,
+  navAnim: navAnim?{t0:navAnim.t0,dur:navAnim.dur,qE:[...navAnim.qE],tE:[...navAnim.tE]}:null,
+  lastMid:__lastMidClick, hasTimer:!!__singleTimer});
 window.__pickModel=pickModel;
 window.__MID_DELAY=MID_DELAY;
+window.__forceDoubleMid=onDoubleMid; // for tests only
 
 /* ═══ GLB-Loader (Binary glTF 2.0) – mit voller Node-Hierarchie für Baugruppen ═══ */
 function parseGLB(buf){
@@ -1108,6 +1155,7 @@ window.__loadGLBBuffer=function(name,buf){
 function render(){
   requestAnimationFrame(render);resize();
   if(!meshLoaded)return;
+  applyNavAnim();
   updateCut();
   const asp=cv.width/cv.height,rot=q2m(arcQ);
   const cd=[rot[8],rot[9],rot[10]];
@@ -1178,10 +1226,12 @@ function render(){
     const tcx=view[0]*target[0]+view[4]*target[1]+view[8]*target[2]+view[12];
     const tcy=view[1]*target[0]+view[5]*target[1]+view[9]*target[2]+view[13];
     const tcz=view[2]*target[0]+view[6]*target[1]+view[10]*target[2]+view[14];
+    // rot(arcQ)^T für die Kugel verwenden, damit sie in dieselbe Richtung rotiert
+    // wie das Modell (beides folgt nun der Maus beim Ziehen).
     const sw=new Float32Array(16);
-    sw[0]=r[0]*s;sw[1]=r[1]*s;sw[2]=r[2]*s;sw[3]=0;
-    sw[4]=r[4]*s;sw[5]=r[5]*s;sw[6]=r[6]*s;sw[7]=0;
-    sw[8]=r[8]*s;sw[9]=r[9]*s;sw[10]=r[10]*s;sw[11]=0;
+    sw[0]=r[0]*s;sw[1]=r[4]*s;sw[2]=r[8]*s;sw[3]=0;
+    sw[4]=r[1]*s;sw[5]=r[5]*s;sw[6]=r[9]*s;sw[7]=0;
+    sw[8]=r[2]*s;sw[9]=r[6]*s;sw[10]=r[10]*s;sw[11]=0;
     sw[12]=tcx;sw[13]=tcy;sw[14]=tcz;sw[15]=1;
     const smvp=mul(proj,sw);
 
