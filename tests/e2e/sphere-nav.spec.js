@@ -76,7 +76,7 @@ test('middle-drag INSIDE sphere rotates (arcball) and sphere visually rotates', 
   expect(differ, 'sphere rendered identically before and after rotation').toBe(true);
 });
 
-test('middle-drag OUTSIDE sphere rotates around screen-Z', async ({ page }) => {
+test('middle-drag OUTSIDE sphere rotates around screen-Z (pure roll, view axis preserved)', async ({ page }) => {
   await openLoaded(page);
   const q0 = await page.evaluate(() => window.__state().arcQ);
 
@@ -91,6 +91,17 @@ test('middle-drag OUTSIDE sphere rotates around screen-Z', async ({ page }) => {
   const delta = await qDelta(q0, q1);
   console.log('outside-drag delta=', delta.toFixed(4));
   expect(delta).toBeGreaterThan(0.001);
+
+  // col2 of rot(arcQ) = view direction in world — must be preserved (pure roll).
+  const col2 = q => {
+    const [x,y,z,w] = q;
+    return [2*(x*z+y*w), 2*(y*z-x*w), 1-2*(x*x+y*y)];
+  };
+  const [a0,b0,c0] = col2(q0);
+  const [a1,b1,c1] = col2(q1);
+  const axisDot = a0*a1 + b0*b1 + c0*c1; // should be ~1 (same direction)
+  console.log('col2 dot (preserved view-axis):', axisDot.toFixed(6));
+  expect(axisDot).toBeGreaterThan(0.9999); // view axis must not tilt
 });
 
 test('left-drag pans (target moves), does NOT rotate', async ({ page }) => {
