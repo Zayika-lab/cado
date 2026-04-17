@@ -1,5 +1,7 @@
 # Cado — Statuslog
 
+> 🔔 **AWAITING YOU** — батч фіч #6 MVP + #8 axis-align + #9 plane labels + cap-pick зроблено, 18/18 тестів ✅, пуш в origin/main. Перевір і пиши далі.
+
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 
 **Легенда:** ⏳ planned · 🔍 analysis · 🔧 implementing · 🧪 tested (emu) · 🚢 committed+pushed · ⚠️ blocked
@@ -71,15 +73,35 @@
 - **План:** додати окремий "Schnitt"-режим, ввімкнути/вимкнути; довільна нормаль (з face pick чи axis); збереження у Firestore
 - **Залежить від:** наявності "площин" (item 6 v2)
 
-## 8. Ausrichten-Funktion ⏳
+## 8. Ausrichten-Funktion 🚢
 
-- **Аналіз:** axis align — обертати модель так щоб обрана вісь збіглася з X/Y/Z system; face align — площина паралельна XY/XZ/YZ
-- **План:** кнопки "Achse → X/Y/Z" і "Fläche → XY/XZ/YZ" після вибору; використати slerp для плавності
+- **Аналіз:** axis align — обертати сцену так щоб primary direction обраної частини була вздовж screen-X/Y/Z; face align вже був реалізований у #4
+- **Виконання:**
+  - `principalDirection(part)`: PCA через power-iteration на вершинах частини
+  - `alignPartTo(axisIdx)`: r_local rotates e_i → cs_D; apply as `arcQ = arcQ * r` → col_i(rot) = D_world
+  - Кнопки "Achse → X/Y/Z" у Teile-панелі, з'являються коли частина обрана
+  - Плавна slerp-анімація через startNavAnim
+- **Тест:** `align.spec.js` — leg's PCA direction ≈ (0,±1,0); після "→ X" col0·D ≈ 1.0
+- **Коміти:** (в процесі)
 
-## 9. Schnitt-Erweiterung ⏳
+## 9. Schnitt-Erweiterung 🚢
 
-- **Аналіз:** поточні X/Y/Z = перпендикулярно осі = YZ/XZ/XY площина; потрібно явні XY/XZ/YZ-опції
-- **План:** перейменувати/додати кнопки з явними назвами площин
+- **Аналіз:** X/Y/Z = перпендикулярно осі = YZ/XZ/XY площина; перейменовано кнопки
+- **Виконання:** "YZ" / "XZ" / "XY" як текст кнопок + tooltip який пояснює відповідну перпендикулярну вісь
+- **Тест:** `align.spec.js` перевіряє текст кнопок
+- **Коміти:** (в процесі)
+
+## Додатково: click/right-click на Schnittfläche 🚢
+
+- **Аналіз:** pickModel має впізнавати cap (поверхню розрізу), бо розріз — це видима "поверхня"
+- **Виконання:**
+  - Збираємо ВСІ ray-triangle intersections
+  - Рахуємо скільки їх до cap-plane (непарно = всередині моделі → cap видимий тут)
+  - Якщо cap ближче першого kept-hit і всередині bbox → cap hit з normal=±e_clipAxis
+  - Double-click на cap → face-align = поворот екрана паралельно розрізу (бо normal уже axis-aligned)
+  - Right-click на cap → popup "Schnittfläche" замість "Teil"
+- **Тест:** `cap-pick.spec.js`
+- **Коміти:** (в процесі)
 
 ---
 
