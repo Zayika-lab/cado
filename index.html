@@ -35,7 +35,10 @@ canvas{display:block;width:100%;height:100%}
   background:#4a8eff;border-radius:50%;transition:left 0.15s}
 .cutTog input:checked + .togKnob{background:rgba(74,142,255,0.5)}
 .cutTog input:checked + .togKnob::before{left:17px}
-#ctrl.cutOff .sr > .vl, #ctrl.cutOff .sr > input[type=range], #ctrl.cutOff .sr > .ab{opacity:0.35;pointer-events:none}
+#ctrl.cutOff .cutRow > .vl, #ctrl.cutOff .cutRow > input[type=range], #ctrl.cutOff .cutRow > .ab{opacity:0.35;pointer-events:none}
+#cutPickBtn.active{background:#4a8eff;color:#fff;border-color:#4a8eff}
+body.facePick{cursor:crosshair}
+body.facePick canvas{cursor:crosshair}
 
 /* Anmeldung-Overlay */
 #auth{position:fixed;inset:0;z-index:100;background:linear-gradient(135deg,#1b1e24 0%,#0f1116 100%);
@@ -244,15 +247,16 @@ body.axisMode canvas{cursor:crosshair}
 <canvas id="hud" width="130" height="130"></canvas>
 
 <div id="ctrl">
-  <div class="sr"><span class="lb">Schnitt</span>
+  <div class="sr cutRow"><span class="lb">Schnitt</span>
     <label class="cutTog"><input type="checkbox" id="cutEnable"><span class="togKnob"></span></label>
     <input type="range" id="cutR" min="0" max="1" step="0.002" value="0.5">
     <span class="vl" id="cutV">50%</span>
     <button class="ab" data-a="0" title="Schnittebene senkrecht zur X-Achse">YZ</button>
     <button class="ab" data-a="1" title="Schnittebene senkrecht zur Y-Achse">XZ</button>
     <button class="ab on" data-a="2" title="Schnittebene senkrecht zur Z-Achse">XY</button>
+    <button id="cutPickBtn" class="ab" title="Fläche anklicken, um Schnittebene festzulegen">⊕ Fläche</button>
   </div>
-  <div class="sr"><span class="lb">Kugel</span>
+  <div class="sr sphRow"><span class="lb">Kugel</span>
     <input type="range" id="sphR" min="0.1" max="1.5" step="0.02" value="0.54">
     <span class="vl" id="sphV">0.54</span>
   </div>
@@ -1253,7 +1257,8 @@ function toggleAxisMode(on){
 }
 document.getElementById('axisModeBtn').addEventListener('click',()=>toggleAxisMode());
 
-// Bei Bewegung im Achsen-Modus: getroffenen Body ermitteln und Zylinder-Fit testen
+// Im Achsen-Modus jeden getroffenen Body anzeigen (nicht nur Zylinder) —
+// createAxisForBody macht Zylinder-Fit und fällt sonst auf PCA zurück.
 function axisModeHover(mx,my){
   if(!axisMode||!meshLoaded){ hoverBodyIdx=-1; return; }
   const hit=pickModel(mx,my);
@@ -1262,9 +1267,7 @@ function axisModeHover(mx,my){
   const partIdx = glbInfo.parts.findIndex(p=>hit.triIdx>=p.triStart && hit.triIdx<p.triStart+p.triCount);
   if(partIdx<0) return;
   const bodyIdx = glbInfo.bodies.findIndex(b=>b.partIndices.includes(partIdx));
-  if(bodyIdx<0) return;
-  const fit=fitCylinderAxis(glbInfo.bodies[bodyIdx]);
-  if(fit && fit.confidence>0.85) hoverBodyIdx=bodyIdx;
+  if(bodyIdx>=0) hoverBodyIdx=bodyIdx;
 }
 function axisModeClick(mx,my){
   if(!axisMode||hoverBodyIdx<0) return false;
@@ -1339,34 +1342,9 @@ function showGlbPopup(mx,my){
   rows.push(`<div class="row"><span class="k">Teile</span><span class="v">${glbInfo.parts.length}</span></div>`);
   rows.push(`<div class="row"><span class="k">Materialien</span><span class="v">${glbInfo.materials.length}</span></div>`);
   if(glbInfo.asset.generator) rows.push(`<div class="row"><span class="k">Generator</span><span class="v" title="${glbInfo.asset.generator}">${glbInfo.asset.generator}</span></div>`);
-  // Aktionen: Schnittebene / Achse erstellen
-  if(hit && !hit.isCap){
-    rows.push('<button class="action" id="glbpUseCut">Diese Fläche als Schnittebene</button>');
-    if(part){
-      // partFromTri → zugehöriger Body über partIndices suchen
-      const bIdx = glbInfo.bodies.findIndex(b => b.partIndices.includes(glbInfo.parts.indexOf(part)));
-      if(bIdx>=0){
-        rows.push('<button class="action" id="glbpMakeAxis">Achse erstellen (Zylinder / PCA)</button>');
-        pop.dataset.bodyIdx=String(bIdx);
-      }
-    }
-  }
+  // Popup zeigt nur Informationen — Aktionen laufen über dedizierte Modi
+  // (⊕ Fläche im Schnitt-Block, ⊕ Neu in der Teile-Panel)
   pop.innerHTML=rows.join('');
-  const btnCut=document.getElementById('glbpUseCut');
-  if(btnCut){
-    btnCut.addEventListener('click',()=>{
-      setCustomCutFromFace(hit.normal, hit.point);
-      hideGlbPopup();
-    });
-  }
-  const btnAxis=document.getElementById('glbpMakeAxis');
-  if(btnAxis){
-    btnAxis.addEventListener('click',()=>{
-      const bi=parseInt(pop.dataset.bodyIdx,10);
-      createAxisForBody(bi);
-      hideGlbPopup();
-    });
-  }
   pop.style.display='block';
   // Position clamp'en, damit das Popup nicht vom Rand verdeckt wird
   const w=pop.offsetWidth, h=pop.offsetHeight;
