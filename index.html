@@ -1053,6 +1053,23 @@ gl.bufferData(gl.ARRAY_BUFFER,sphereVerts,gl.STATIC_DRAW);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 const sphereVertCount=sphereVerts.length/3;
 
+// Statischer Kreis (XY-Ebene, Radius 1) — wird ohne arcQ-Rotation gerendert
+// und erscheint immer als flacher Kreis um die Kugel (Bildschirm-Normal-Ring).
+function genCircle2D(segs){
+  const v=[];
+  for(let i=0;i<segs;i++){
+    const t1=i/segs*Math.PI*2, t2=(i+1)/segs*Math.PI*2;
+    v.push(Math.cos(t1), Math.sin(t1), 0, Math.cos(t2), Math.sin(t2), 0);
+  }
+  return new Float32Array(v);
+}
+const sphereRingVerts=genCircle2D(96);
+const sphereRingVao=gl.createVertexArray();gl.bindVertexArray(sphereRingVao);
+const sphereRingBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sphereRingBuf);
+gl.bufferData(gl.ARRAY_BUFFER,sphereRingVerts,gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+const sphereRingVertCount=sphereRingVerts.length/3;
+
 // Einheitskugel als Dreiecksnetz (UV-Kugel, 2 Dreiecke pro Quad) — für halbtransparente Füllung
 function genSphereTriangles(nLat,nLon){
   const v=[];
@@ -2347,10 +2364,15 @@ function render(){
   const proj=ortho(-oSize*asp,oSize*asp,-oSize,oSize,1,100000);
   const vp=mul(proj,view);
   // Generische Schnittebene: discard where -N·p + d < 0 ⟺ N·p > d
-  // Wenn Schnitt deaktiviert: (0,0,0,1) — dot = 1 > 0, niemals verwerfen
+  // Wenn Schnitt deaktiviert: (0,0,0,1) — dot = 1 > 0, niemals verwerfen.
+  // Bei customPlane (Fläche als Schnitt gewählt): d leicht in Richtung der gehaltenen
+  // Seite verschieben, damit Dreiecke exakt auf der Ebene (= die ausgewählte Fläche)
+  // mit verworfen werden und nicht sichtbar bleiben.
   let cv4;
   if(cutEnabled){
-    const __N=cutNormal(), __D=cutD();
+    const __N=cutNormal();
+    let __D=cutD();
+    if(customPlane) __D -= (maxDim||1)*0.0008;
     cv4=[-__N[0], -__N[1], -__N[2], __D];
   } else {
     cv4=[0,0,0,1];
@@ -2360,20 +2382,8 @@ function render(){
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
 
-  // Pass 1: Stencil zählen (keine Farb-/Tiefenschreibung)
-  gl.enable(gl.STENCIL_TEST);gl.stencilMask(0xff);
-  gl.colorMask(false,false,false,false);gl.depthMask(false);
-  gl.useProgram(pSten);gl.bindVertexArray(meshVao);
-  gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
-  gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.FRONT);gl.stencilFunc(gl.ALWAYS,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.INCR_WRAP);
-  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
-  gl.cullFace(gl.BACK);gl.stencilOp(gl.KEEP,gl.KEEP,gl.DECR_WRAP);
-  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
-  gl.disable(gl.CULL_FACE);
-  gl.colorMask(true,true,true,true);gl.depthMask(true);
-  gl.disable(gl.STENCIL_TEST);
+  // Pass 1 übersprungen — Stencil wird pro Teil während Pass 3 aufgebaut,
+  // damit Cap in Material-Farbe des jeweiligen Teils gerendert wird.
 
   // Pass 2: Geclipptes Modell (Vorderseite, schreibt Tiefe)
   // Jeden Primitive mit seiner Material-baseColor zeichnen (fallt zurück auf Grau).
@@ -2451,19 +2461,49 @@ function render(){
   }
   gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
 
-  // Pass 3 & 4 (Cap + Kontur) nur bei aktiviertem Schnitt
-  if(cutEnabled){
-    gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
-    gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
-    gl.depthMask(false);
-    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
-    gl.useProgram(pCap);gl.bindVertexArray(capVao);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
-    gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.2,0.78,0.88]);
-    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-    gl.disable(gl.POLYGON_OFFSET_FILL);
-    gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+  // Pass 3: Cap pro Teil mit der Material-Farbe dieses Teils.
+  // Für jeden Primitive: Stencil aus geclippten Back/Front-Faces aufbauen → dann
+  // Cap-Quad in der Material-Farbe zeichnen, maskiert durch Stencil.
+  if(cutEnabled && glbInfo && glbInfo.parts && glbInfo.parts.length>0){
+    const capMVP=mul(vp,capMat());
+    gl.enable(gl.STENCIL_TEST);
+    for(const part of glbInfo.parts){
+      if(part.triCount===0) continue;
+      // Stencil für dieses Teil zurücksetzen
+      gl.clearStencil(0);
+      gl.clear(gl.STENCIL_BUFFER_BIT);
+      // Teil-spezifischer Stencil-Pass (nur Back/Front-Faces clipseitig zählen)
+      gl.colorMask(false,false,false,false);gl.depthMask(false);
+      gl.stencilMask(0xff);
+      gl.stencilFunc(gl.ALWAYS,0,0xff);
+      gl.useProgram(pSten);gl.bindVertexArray(meshVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
+      gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.FRONT);gl.stencilOp(gl.KEEP,gl.KEEP,gl.INCR_WRAP);
+      gl.drawElements(gl.TRIANGLES, part.triCount*3, gl.UNSIGNED_INT, part.triStart*3*4);
+      gl.cullFace(gl.BACK);gl.stencilOp(gl.KEEP,gl.KEEP,gl.DECR_WRAP);
+      gl.drawElements(gl.TRIANGLES, part.triCount*3, gl.UNSIGNED_INT, part.triStart*3*4);
+      gl.disable(gl.CULL_FACE);
+      gl.colorMask(true,true,true,true);gl.depthMask(true);
+      // Cap-Quad in Material-Farbe, nur wo Stencil ≠ 0
+      gl.stencilMask(0x00);
+      gl.stencilFunc(gl.NOTEQUAL,0,0xff);
+      gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
+      gl.depthMask(false);
+      gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
+      gl.useProgram(pCap);gl.bindVertexArray(capVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,capMVP);
+      const mat=part.materialIdx>=0 ? glbInfo.materials[part.materialIdx] : null;
+      const bc=mat ? mat.baseColor : [0.7,0.72,0.76,1];
+      gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[bc[0],bc[1],bc[2]]);
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.depthMask(true);
+    }
+    gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
 
+    // Konturlinien (schwarz, über allem)
     if(cCount>0){
       gl.useProgram(pLine);gl.bindVertexArray(cVao);
       gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
@@ -2500,6 +2540,17 @@ function render(){
     gl.bindVertexArray(sphereVao);
     gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.55]);
     gl.drawArrays(gl.LINES,0,sphereVertCount);
+
+    // Stationärer Ring-Kontur: rotiert NICHT mit arcQ, erscheint immer als
+    // flacher Kreis am Bildschirm (Radius ≈ Kugelgrösse). Als Anker/Rahmen der Kugel.
+    const sw2=new Float32Array(16);
+    sw2[0]=s; sw2[5]=s; sw2[10]=s;
+    sw2[12]=tcx; sw2[13]=tcy; sw2[14]=tcz; sw2[15]=1;
+    const ringMvp=mul(proj,sw2);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,ringMvp);
+    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.9]);
+    gl.bindVertexArray(sphereRingVao);
+    gl.drawArrays(gl.LINES,0,sphereRingVertCount);
 
     gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
   }
