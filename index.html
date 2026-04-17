@@ -295,6 +295,7 @@ body.axisMode canvas{cursor:crosshair}
     <button id="cutPickBtn" class="ab" title="Fläche anklicken, um Schnittebene festzulegen">⊕ Fläche</button>
   </div>
   <div class="sr sphRow"><span class="lb">Kugel</span>
+    <label class="cutTog"><input type="checkbox" id="sphEnable" checked><span class="togKnob"></span></label>
     <input type="range" id="sphR" min="0.1" max="1.5" step="0.02" value="0.54">
     <span class="vl" id="sphV">0.54</span>
   </div>
@@ -1152,7 +1153,7 @@ function qm(a,b){return[a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],a[3]*b[1]-a[0]*b
 function qn(q){const l=Math.sqrt(q[0]**2+q[1]**2+q[2]**2+q[3]**2);return q.map(x=>x/l);}
 arcQ=qn([Math.sin(0.25),0.12,0.05,Math.cos(0.25)]);
 
-var oSize=1,target=[0,0,0],clipT=0.5,clipAxis=2,cutEnabled=false;
+var oSize=1,target=[0,0,0],clipT=0.5,clipAxis=2,cutEnabled=false,sphereVisible=true;
 // Achsen-Erstellungs-Modus (aktivierbar via Button in der Teile-Panel)
 var axisMode=false, hoverBodyIdx=-1;
 // Benutzerdefinierte Schnittebene (null = axis-aligned mit clipAxis/clipT)
@@ -2149,6 +2150,9 @@ document.getElementById('sphR').oninput=e=>{
   _sphereScale=+e.target.value;
   document.getElementById('sphV').textContent=(+e.target.value).toFixed(2);
 };
+document.getElementById('sphEnable').addEventListener('change',e=>{
+  sphereVisible=e.target.checked;
+});
 
 // Test-Hook: Zustand lesen (nur für Playwright-Tests verwendet)
 window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphereScale,arcOn,arcOut,
@@ -2453,19 +2457,18 @@ function render(){
   }
   gl.disable(gl.CULL_FACE);
 
-  // Pass 2.3a: Benutzererzeugte Ebenen (halbtransparente Quads)
+  // Pass 2.3a: Benutzererzeugte Ebenen — weisser Rahmen (LINE_LOOP), keine Füllung
   if(createdPlanes.length>0 && planeVao && planeIdxCount>0){
-    gl.useProgram(pSphere);
+    gl.useProgram(pLine);
     gl.bindVertexArray(planeVao);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
-    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-    gl.depthMask(false);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
+    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[1,1,1,0.9]);
+    gl.depthFunc(gl.ALWAYS);
+    gl.lineWidth(1.5);
     for(let i=0;i<createdPlanes.length;i++){
-      const p=createdPlanes[i];
-      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),p.color);
-      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, i*12);
+      gl.drawArrays(gl.LINE_LOOP, i*4, 4);
     }
-    gl.depthMask(true);gl.disable(gl.BLEND);
+    gl.depthFunc(gl.LEQUAL);
   }
   // Pass 2.3b: Benutzererzeugte Achsen als Linien (immer sichtbar)
   if(createdAxes.length>0 && axisVao){
@@ -2515,7 +2518,7 @@ function render(){
     gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
     gl.useProgram(pCap);gl.bindVertexArray(capVao);
     gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
-    gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.2,0.78,0.88]);
+    gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.55,0.56,0.58]);
     gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
@@ -2531,7 +2534,7 @@ function render(){
   // Pass 5: Arcball-Kugel — in KAMERA-Raum gerendert, damit die Rotation (arcQ)
   // visuell sichtbar ist. Modellmatrix = translate(target_cam) * rot(arcQ) * scale.
   // MVP = proj * modellmatrix (kein view, da bereits in Kamera-Raum).
-  {
+  if(sphereVisible){
     const r=q2m(arcQ);
     const s=oSize*_sphereScale;
     // target in Kamera-Raum: view * [target,1] — view enthält auch Translation (Kamerapos.)
@@ -2557,16 +2560,18 @@ function render(){
     gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.55]);
     gl.drawArrays(gl.LINES,0,sphereVertCount);
 
-    // Stationärer Ring-Kontur: rotiert NICHT mit arcQ, erscheint immer als
-    // flacher Kreis am Bildschirm (Radius ≈ Kugelgrösse). Als Anker/Rahmen der Kugel.
-    const sw2=new Float32Array(16);
-    sw2[0]=s; sw2[5]=s; sw2[10]=s;
-    sw2[12]=tcx; sw2[13]=tcy; sw2[14]=tcz; sw2[15]=1;
-    const ringMvp=mul(proj,sw2);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,ringMvp);
-    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.9]);
-    gl.bindVertexArray(sphereRingVao);
-    gl.drawArrays(gl.LINES,0,sphereRingVertCount);
+    // Stationärer Ring-Kontur: rotiert NICHT mit arcQ (immer flacher Kreis am Bildschirm).
+    // NUR während aktivem Rotations-Drag (middle button) sichtbar — nicht bei Pan/Zoom/Idle.
+    if(arcOn){
+      const sw2=new Float32Array(16);
+      sw2[0]=s; sw2[5]=s; sw2[10]=s;
+      sw2[12]=tcx; sw2[13]=tcy; sw2[14]=tcz; sw2[15]=1;
+      const ringMvp=mul(proj,sw2);
+      gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,ringMvp);
+      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[0.29,0.56,1.0,0.9]);
+      gl.bindVertexArray(sphereRingVao);
+      gl.drawArrays(gl.LINES,0,sphereRingVertCount);
+    }
 
     gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
   }

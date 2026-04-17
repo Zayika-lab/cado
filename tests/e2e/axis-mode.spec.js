@@ -32,11 +32,11 @@ test('cut toggle disables clipping shader coefficients', async ({ page }) => {
   await load(page);
   expect(await page.evaluate(() => window.cutEnabled)).toBe(false);
 
-  // Enable via label (real checkbox is visually hidden, clicked through label)
-  await page.locator('.cutTog').click();
+  // Enable via the cut-row toggle specifically (label wrapping the hidden checkbox)
+  await page.locator('.cutRow .cutTog').click();
   expect(await page.evaluate(() => window.cutEnabled)).toBe(true);
 
-  await page.locator('.cutTog').click();
+  await page.locator('.cutRow .cutTog').click();
   expect(await page.evaluate(() => window.cutEnabled)).toBe(false);
 });
 
