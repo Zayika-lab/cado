@@ -1,6 +1,6 @@
 # Cado — Statuslog
 
-> 🔔 **AWAITING YOU** — батч фіч #6 MVP + #8 axis-align + #9 plane labels + cap-pick зроблено, 18/18 тестів ✅, пуш в origin/main. Перевір і пиши далі.
+> 🔔 **AWAITING YOU** — #7 v1 (custom cut plane), bodies-grouping фікс ("1 файл = 1 body, не 2"), 21/21 тестів ✅, запушено. Перевір в браузері: правий клік по грані → "Diese Fläche als Schnittebene".
 
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 
@@ -67,11 +67,28 @@
 - **Тест:** `parts-panel.spec.js` — список має 6 item, клік змінює `selectedPartIdx`, screenshot з highlight
 - **Коміт:** (в процесі)
 
-## 7. Schnitt als eigene Funktion ⏳
+## 7. Schnitt als eigene Funktion 🚢 (v1, без persistence)
 
-- **Аналіз:** зараз X/Y/Z + слайдер на axis-aligned; треба — довільна площина, збереження
-- **План:** додати окремий "Schnitt"-режим, ввімкнути/вимкнути; довільна нормаль (з face pick чи axis); збереження у Firestore
-- **Залежить від:** наявності "площин" (item 6 v2)
+- **Аналіз:** зараз X/Y/Z + слайдер; треба довільна нормаль. Рефакторнув усе через
+  `cutNormal()`/`cutD()` (generic plane equation N·p = d). Shader uClip не
+  міняв — обчислюю `cv4=[-N, d]` на CPU.
+- **Виконання:**
+  - `customPlane = { normal, dMin, dMax, t }` — null якщо axis-aligned
+  - `setCustomCutFromFace(N, P0)` зберігає нормаль, обчислює dMin/dMax як проєкцію bbox
+  - `capMat()`, `computeContour()`, pickModel — усі generic plane
+  - У popup додано "Diese Fläche als Schnittebene" (не на cap-hit)
+  - Slider керує `customPlane.t` якщо custom, інакше `clipT`
+  - XY/XZ/YZ-кнопки очищають custom (clearCustomCut) і повертають axis-mode
+- **ВІДКЛАДЕНО:** збереження площин на сервері (Firestore doc per user)
+- **Тест:** `custom-cut.spec.js` — activates custom, clears on axis click
+- **Коміти:** (в процесі)
+
+## Фікс: "один файл = один body" 🚢
+
+- **Аналіз:** користувач завантажив один GLB з одним node/multi-primitive і бачив 2 "частини". parseGLB віддавав parts[] по кожному primitive.
+- **Виконання:** додано `bodies[]` — групує послідовні parts з однаковим `name` (один GLB-node) в один body. `materialIdxs[]` агрегує всі матеріали, `triStart/triCount` покриває всі primitives. Teile-панель показує bodies (не parts); highlight і alignPartTo працюють на body; popup і partFromTri лишились на primitive-рівні (щоб показувати материал клікнутого primitive).
+- **Тест:** `custom-cut.spec.js` — chair 6 parts = 6 bodies (1:1 оскільки усі в окремих нодах)
+- **Коміти:** (в процесі)
 
 ## 8. Ausrichten-Funktion 🚢
 
