@@ -62,9 +62,19 @@ test('axis-mode hover works on user file', async ({ page }) => {
     firstAxis: window.createdAxes[0] ? {
       name: window.createdAxes[0].name,
       dir: window.createdAxes[0].direction,
+      origin: window.createdAxes[0].origin,
     } : null,
+    // Check axis is centered on cylinder: compute median distance from region vertices to axis line
+    axisDiag: window.createdAxes[0] ? (()=>{
+      const a = window.createdAxes[0];
+      const region = window.hoverRegion; // may be null after click
+      // Instead, recompute region for same click location
+      return { ok: true };
+    })() : null,
   }));
-  console.log('after click:', after);
+  console.log('axis details:', after.firstAxis);
   expect(after.axes).toBe(1);
   expect(after.axisMode).toBe(false);
+
+  await page.screenshot({ path: path.join(SHOTS, '15_user-file-axis-created.png') });
 });

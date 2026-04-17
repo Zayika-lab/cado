@@ -1354,11 +1354,12 @@ function axisModeClick(mx,my){
   return true;
 }
 
-// Achse aus einer Dreiecks-Menge (Flood-Fill-Region) bestimmen.
-// Analog zu fitCylinderAxis, aber direkt auf gegebenen Dreiecken.
+// Achse aus einer Flood-Fill-Region. Für Zylinderflächen: Richtung aus Normalen-
+// Kovarianz + Achsenpunkt aus Kreisfit in der dazu senkrechten Ebene (so liegt
+// die Achse wirklich in der Zylindermitte, auch bei nur teilweise sichtbarem Mantel).
 function createAxisForRegion(triSet){
   if(!triSet||triSet.size<2) return null;
-  // Kovarianz der Flächennormalen
+  // 1) Richtung d aus kleinstem Eigenvektor der Normalen-Kovarianz
   let Cxx=0,Cyy=0,Czz=0,Cxy=0,Cxz=0,Cyz=0;
   const nrm=triNormals;
   for(const t of triSet){
@@ -1366,46 +1367,44 @@ function createAxisForRegion(triSet){
     Cxx+=x*x; Cyy+=y*y; Czz+=z*z;
     Cxy+=x*y; Cxz+=x*z; Cyz+=y*z;
   }
-  // Q = tr*I - C; größter Eigenvektor von Q = kleinster von C = Zylinderachse
   const tr=Cxx+Cyy+Czz;
   const Qxx=tr-Cxx,Qyy=tr-Cyy,Qzz=tr-Czz;
   const Qxy=-Cxy,Qxz=-Cxz,Qyz=-Cyz;
-  let vx=1,vy=1,vz=0;
+  let dx=1,dy=1,dz=0;
   for(let k=0;k<40;k++){
-    const nx=Qxx*vx+Qxy*vy+Qxz*vz;
-    const ny=Qxy*vx+Qyy*vy+Qyz*vz;
-    const nz=Qxz*vx+Qyz*vy+Qzz*vz;
+    const nx=Qxx*dx+Qxy*dy+Qxz*dz;
+    const ny=Qxy*dx+Qyy*dy+Qyz*dz;
+    const nz=Qxz*dx+Qyz*dy+Qzz*dz;
     const l=Math.sqrt(nx*nx+ny*ny+nz*nz);
     if(l<1e-12) return null;
-    vx=nx/l; vy=ny/l; vz=nz/l;
+    dx=nx/l; dy=ny/l; dz=nz/l;
   }
-  // Varianz entlang Kandidatenachse
   let varAlong=0;
   for(const t of triSet){
-    const d=nrm[t*3]*vx+nrm[t*3+1]*vy+nrm[t*3+2]*vz;
+    const d=nrm[t*3]*dx+nrm[t*3+1]*dy+nrm[t*3+2]*dz;
     varAlong+=d*d;
   }
   const confidence = tr>1e-9 ? 1-varAlong/tr : 0;
-  // Schwerpunkt + Länge aus Vertex-Menge
+
+  // 2) Vertex-Menge + Schwerpunkt c
   const verts=new Set();
   for(const t of triSet){
     verts.add(MI[t*3]); verts.add(MI[t*3+1]); verts.add(MI[t*3+2]);
   }
-  let cx=0,cy=0,cz=0,nc=0;
-  for(const vi of verts){ cx+=MV[vi*3]; cy+=MV[vi*3+1]; cz+=MV[vi*3+2]; nc++; }
-  cx/=nc; cy/=nc; cz/=nc;
-  let dMin=Infinity,dMax=-Infinity;
-  // Wenn Zylinder erkannt, verwende berechnete Achse; sonst fallback: PCA der Vertices
-  let axis=[vx,vy,vz];
+  let cx=0,cy=0,cz=0,nv=0;
+  for(const vi of verts){ cx+=MV[vi*3]; cy+=MV[vi*3+1]; cz+=MV[vi*3+2]; nv++; }
+  cx/=nv; cy/=nv; cz/=nv;
+
+  let axis=[dx,dy,dz], origin=[cx,cy,cz];
+
   if(confidence<0.6){
-    // Nicht-zylinder: PCA der Vertex-Positionen
+    // Nicht-zylinder: Richtung via PCA der Vertices, Ursprung = Schwerpunkt
     let Pxx=0,Pyy=0,Pzz=0,Pxy=0,Pxz=0,Pyz=0;
     for(const vi of verts){
-      const dx=MV[vi*3]-cx, dy=MV[vi*3+1]-cy, dz=MV[vi*3+2]-cz;
-      Pxx+=dx*dx; Pyy+=dy*dy; Pzz+=dz*dz;
-      Pxy+=dx*dy; Pxz+=dx*dz; Pyz+=dy*dz;
+      const rx=MV[vi*3]-cx, ry=MV[vi*3+1]-cy, rz=MV[vi*3+2]-cz;
+      Pxx+=rx*rx; Pyy+=ry*ry; Pzz+=rz*rz;
+      Pxy+=rx*ry; Pxz+=rx*rz; Pyz+=ry*rz;
     }
-    // Größter Eigenvektor von P = Hauptrichtung
     let ux=1,uy=0,uz=0;
     for(let k=0;k<40;k++){
       const nx=Pxx*ux+Pxy*uy+Pxz*uz;
@@ -1416,15 +1415,68 @@ function createAxisForRegion(triSet){
       ux=nx/l; uy=ny/l; uz=nz/l;
     }
     axis=[ux,uy,uz];
+  } else {
+    // Zylinder: 2D-Basis {u, w} senkrecht zu d bauen
+    // u = d × worldUp (stabil gewählt, um kleine Richtung zu vermeiden)
+    const upX=Math.abs(dy)<0.9?0:1, upY=upX===0?1:0, upZ=0;
+    let ux=dy*upZ-dz*upY, uy=dz*upX-dx*upZ, uz=dx*upY-dy*upX;
+    let ul=Math.sqrt(ux*ux+uy*uy+uz*uz);
+    if(ul<1e-9){ ux=1; uy=0; uz=0; ul=1; }
+    ux/=ul; uy/=ul; uz/=ul;
+    // w = d × u
+    const wx=dy*uz-dz*uy, wy=dz*ux-dx*uz, wz=dx*uy-dy*ux;
+    // 2D-Projektion jedes Vertex relativ zu c; Kreis-LS-Fit
+    // Min ||(u_i² + w_i²) + a*u_i + b*w_i + c_circ||² → Normalgleichung 3x3
+    let Suu=0,Suw=0,Sww=0,Su=0,Sw=0,N=0;
+    let Sr=0,Sru=0,Srw=0;
+    for(const vi of verts){
+      const rx=MV[vi*3]-cx, ry=MV[vi*3+1]-cy, rz=MV[vi*3+2]-cz;
+      const ui=rx*ux+ry*uy+rz*uz;
+      const wi=rx*wx+ry*wy+rz*wz;
+      const r2=ui*ui+wi*wi;
+      Suu+=ui*ui; Suw+=ui*wi; Sww+=wi*wi;
+      Su+=ui; Sw+=wi; N++;
+      Sr+=r2; Sru+=ui*r2; Srw+=wi*r2;
+    }
+    // System: [Suu Suw Su; Suw Sww Sw; Su Sw N] * [a,b,c_circ]^T = -[Sru; Srw; Sr]
+    const A=[[Suu,Suw,Su],[Suw,Sww,Sw],[Su,Sw,N]];
+    const bv=[-Sru,-Srw,-Sr];
+    // 3x3-Solve mit Gauss-Jordan
+    function solve3x3(A,b){
+      const M=[[...A[0],b[0]],[...A[1],b[1]],[...A[2],b[2]]];
+      for(let i=0;i<3;i++){
+        let p=i; for(let j=i+1;j<3;j++) if(Math.abs(M[j][i])>Math.abs(M[p][i])) p=j;
+        if(Math.abs(M[p][i])<1e-12) return null;
+        [M[i],M[p]]=[M[p],M[i]];
+        for(let j=0;j<3;j++) if(j!==i){
+          const f=M[j][i]/M[i][i];
+          for(let k=0;k<4;k++) M[j][k]-=f*M[i][k];
+        }
+      }
+      return [M[0][3]/M[0][0], M[1][3]/M[1][1], M[2][3]/M[2][2]];
+    }
+    const sol=solve3x3(A,bv);
+    if(sol){
+      const uC=-sol[0]/2, wC=-sol[1]/2;
+      // Achsenpunkt im 3D: c + uC*u + wC*w
+      origin=[cx+uC*ux+wC*wx, cy+uC*uy+wC*wy, cz+uC*uz+wC*wz];
+    }
   }
+
+  // 3) Axiale Ausdehnung: dMin/dMax entlang axis um origin
+  let aMin=Infinity,aMax=-Infinity;
   for(const vi of verts){
-    const dx=MV[vi*3]-cx, dy=MV[vi*3+1]-cy, dz=MV[vi*3+2]-cz;
-    const d=dx*axis[0]+dy*axis[1]+dz*axis[2];
-    if(d<dMin) dMin=d; if(d>dMax) dMax=d;
+    const rx=MV[vi*3]-origin[0], ry=MV[vi*3+1]-origin[1], rz=MV[vi*3+2]-origin[2];
+    const a=rx*axis[0]+ry*axis[1]+rz*axis[2];
+    if(a<aMin) aMin=a; if(a>aMax) aMax=a;
   }
-  const length=Math.max(dMax-dMin, 0.001);
+  // Verschiebe origin in die Mitte der axialen Ausdehnung
+  const mid=(aMin+aMax)*0.5;
+  origin=[origin[0]+mid*axis[0], origin[1]+mid*axis[1], origin[2]+mid*axis[2]];
+  const length=Math.max(aMax-aMin, 0.001);
+
   const label=(confidence>=0.6?'Zylinder':'PCA')+': Fläche ('+triSet.size+' △)';
-  const a={name:label, origin:[cx,cy,cz], direction:axis, length:length*1.3, color:[1.0,0.75,0.15], bodyIdx:-1};
+  const a={name:label, origin, direction:axis, length:length*1.15, color:[1.0,0.75,0.15], bodyIdx:-1};
   createdAxes.push(a);
   rebuildAxisBuffer();
   renderPartsList();
