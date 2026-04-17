@@ -36,15 +36,20 @@ test('axis-mode hover works on user file', async ({ page }) => {
   await page.locator('#axisModeBtn').click();
   expect(await page.evaluate(() => window.axisMode)).toBe(true);
 
-  // Hover over center of viewport — should pick some triangle and highlight its body
+  // Hover over center — should pick a triangle and highlight its FACE region
   await page.mouse.move(640, 400);
   await page.waitForTimeout(100);
 
   const hover = await page.evaluate(() => ({
-    hoverBodyIdx: window.hoverBodyIdx,
+    regionSize: window.hoverRegionCount,
   }));
-  console.log('after hover:', hover);
-  expect(hover.hoverBodyIdx).toBeGreaterThanOrEqual(0); // any body highlighted
+  console.log('after hover (region size):', hover);
+  expect(hover.regionSize).toBeGreaterThan(0); // some region highlighted
+  const totalTri = await page.evaluate(() => window.glbInfo.triCount);
+  // hoverRegionCount = indices (3 per triangle). Entire body = totalTri*3.
+  // Region should be STRICTLY LESS than whole body (user complaint: don't light up everything).
+  console.log('region tris:', hover.regionSize/3, ' total tris:', totalTri);
+  expect(hover.regionSize/3).toBeLessThan(totalTri); // not the whole body
 
   await page.screenshot({ path: path.join(SHOTS, '14_user-file-axis-hover.png') });
 
