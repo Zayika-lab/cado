@@ -52,6 +52,48 @@ canvas{display:block;width:100%;height:100%}
 /* HUD-Kompass (Koordinatensystem) unten links */
 #hud{position:fixed;bottom:10px;left:10px;z-index:15;pointer-events:none;
   width:130px;height:130px}
+
+/* Datei-Seitenleiste links */
+#filesPanel{position:fixed;top:0;left:0;bottom:0;width:260px;z-index:18;
+  background:rgba(20,22,28,0.95);border-right:1px solid rgba(74,142,255,0.2);
+  display:none;flex-direction:column;backdrop-filter:blur(10px);
+  transform:translateX(-260px);transition:transform 0.22s ease}
+#filesPanel.show{display:flex}
+#filesPanel.open{transform:translateX(0)}
+#fpHead{padding:14px 14px 10px;border-bottom:1px solid rgba(74,142,255,0.15)}
+#fpTitle{font-size:11px;text-transform:uppercase;letter-spacing:1px;
+  color:#7a8194;font-weight:600;margin-bottom:8px}
+#fpQuotaTxt{font:11px monospace;color:#c8ccd4;margin-bottom:6px;
+  display:flex;justify-content:space-between}
+#fpQuotaBar{height:4px;background:rgba(74,142,255,0.1);border-radius:2px;overflow:hidden}
+#fpQuotaFill{height:100%;background:#4a8eff;width:0;transition:width 0.3s;border-radius:2px}
+#fpQuotaFill.warn{background:#ffa726}
+#fpQuotaFill.full{background:#ff6b6b}
+#fpList{flex:1;overflow-y:auto;padding:4px 0}
+.fpItem{padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.12s}
+.fpItem:hover{background:rgba(74,142,255,0.08)}
+.fpItem.active{background:rgba(74,142,255,0.15);border-left:2px solid #4a8eff;padding-left:12px}
+.fpName{flex:1;font-size:12px;color:#c8ccd4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fpSize{font:10px monospace;color:#7a8194;flex-shrink:0}
+.fpDel{background:transparent;border:none;color:#666;cursor:pointer;font-size:14px;
+  padding:0 4px;opacity:0;transition:opacity 0.15s}
+.fpItem:hover .fpDel{opacity:1}
+.fpDel:hover{color:#ff6b6b}
+#fpUpload{padding:12px 14px;border-top:1px solid rgba(74,142,255,0.15);
+  background:rgba(74,142,255,0.05)}
+#fpUploadBtn{width:100%;padding:8px;background:rgba(74,142,255,0.15);
+  border:1px solid rgba(74,142,255,0.4);border-radius:6px;color:#4a8eff;
+  font:12px system-ui;cursor:pointer;transition:background 0.15s}
+#fpUploadBtn:hover{background:rgba(74,142,255,0.25)}
+#fpUploadBtn:disabled{opacity:0.5;cursor:wait}
+#fpEmpty{padding:20px 14px;font:12px system-ui;color:#5a5a7a;text-align:center;font-style:italic}
+#fpToggle{position:fixed;top:10px;left:10px;z-index:25;
+  background:rgba(20,22,28,0.9);border:1px solid rgba(74,142,255,0.25);
+  border-radius:7px;padding:7px 12px;color:#4a8eff;cursor:pointer;
+  font:12px system-ui;backdrop-filter:blur(8px);display:none;transition:left 0.22s ease}
+#fpToggle.show{display:block}
+#fpToggle.shifted{left:270px}
 </style></head><body>
 
 <!-- Anmeldebildschirm (zuerst sichtbar) -->
@@ -70,6 +112,21 @@ canvas{display:block;width:100%;height:100%}
   <img id="uAva" alt="">
   <span id="uName"></span>
   <button id="logoutBtn">Abmelden</button>
+</div>
+
+<!-- Datei-Seitenleiste (nach Anmeldung sichtbar) -->
+<button id="fpToggle">☰ Dateien</button>
+<div id="filesPanel">
+  <div id="fpHead">
+    <div id="fpTitle">Meine Dateien</div>
+    <div id="fpQuotaTxt"><span>Speicher</span><span id="fpQuotaVal">0 / 100 MB</span></div>
+    <div id="fpQuotaBar"><div id="fpQuotaFill"></div></div>
+  </div>
+  <div id="fpList"></div>
+  <div id="fpUpload">
+    <button id="fpUploadBtn">+ GLB hochladen</button>
+    <input type="file" id="fpUploadIn" accept=".glb" style="display:none">
+  </div>
 </div>
 
 <canvas id="c"></canvas>
@@ -99,9 +156,9 @@ canvas{display:block;width:100%;height:100%}
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
   import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs }
+  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs, deleteDoc, doc }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-  import { getStorage, ref as sRef, uploadBytes, getBytes }
+  import { getStorage, ref as sRef, uploadBytes, getBytes, deleteObject }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-storage.js";
 
   // Firebase-Konfiguration für das Projekt cado-aae0e
@@ -149,23 +206,53 @@ canvas{display:block;width:100%;height:100%}
   // Aktueller Benutzer (wird von onAuthStateChanged gesetzt)
   let currentUser = null;
 
+  // DOM-Referenzen für die Datei-Seitenleiste
+  const fpToggle = document.getElementById('fpToggle');
+  const filesPanel = document.getElementById('filesPanel');
+  const fpList = document.getElementById('fpList');
+  const fpQuotaVal = document.getElementById('fpQuotaVal');
+  const fpQuotaFill = document.getElementById('fpQuotaFill');
+  const fpUploadBtn = document.getElementById('fpUploadBtn');
+  const fpUploadIn = document.getElementById('fpUploadIn');
+  const QUOTA_BYTES = 100 * 1024 * 1024; // 100 MB weiches Nutzerlimit
+
+  fpToggle.addEventListener('click', () => {
+    filesPanel.classList.toggle('open');
+    fpToggle.classList.toggle('shifted');
+  });
+  fpUploadBtn.addEventListener('click', () => fpUploadIn.click());
+  fpUploadIn.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file && window.__uploadFromPanel) await window.__uploadFromPanel(file);
+    fpUploadIn.value = '';
+  });
+
   // Reagiert auf Änderungen des Anmeldezustands
   onAuthStateChanged(auth, async (user) => {
     currentUser = user;
     if (user) {
-      // Angemeldet: Anmeldung ausblenden, Benutzerleiste zeigen
+      // Angemeldet: Anmeldung ausblenden, Benutzerleiste + Dateipanel zeigen
       authEl.classList.add('hide');
       userBar.classList.add('show');
       uAva.src = user.photoURL || '';
       uName.textContent = user.displayName || user.email || 'Benutzer';
       gbtn.disabled = false;
-      // Zuletzt hochgeladenes GLB aus Storage wiederherstellen
-      await loadLatestGLB();
+      filesPanel.classList.add('show');
+      filesPanel.classList.add('open');
+      fpToggle.classList.add('show');
+      fpToggle.classList.add('shifted');
+      // Dateiliste laden und zuletzt verwendete Datei wiederherstellen
+      await refreshFiles({ autoLoadLatest: true });
     } else {
       // Abgemeldet: Anmeldebildschirm wieder anzeigen, UI zurücksetzen
       authEl.classList.remove('hide');
       userBar.classList.remove('show');
       gbtn.disabled = false;
+      filesPanel.classList.remove('show');
+      filesPanel.classList.remove('open');
+      fpToggle.classList.remove('show');
+      fpToggle.classList.remove('shifted');
+      fpList.innerHTML = '';
       // Viewer-UI verstecken
       document.getElementById('drop').classList.remove('hide');
       document.getElementById('ctrl').style.display = 'none';
@@ -175,102 +262,191 @@ canvas{display:block;width:100%;height:100%}
     }
   });
 
-  // IndexedDB-Hilfsfunktionen (lokale Kopie des GLB pro Benutzer)
+  // IndexedDB-Hilfsfunktionen (ein Eintrag je Firestore-Dokument, Schlüssel = docId)
+  // Version 2 löscht alten Store aus der ersten IndexedDB-Generation
   function openIDB() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('cadoGLB', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('files', { keyPath: 'uid' });
+      const r = indexedDB.open('cadoGLB', 2);
+      r.onupgradeneeded = () => {
+        const idb = r.result;
+        if (idb.objectStoreNames.contains('files')) idb.deleteObjectStore('files');
+        const os = idb.createObjectStore('files', { keyPath: 'docId' });
+        os.createIndex('uid', 'uid', { unique: false });
+      };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     });
   }
-  async function idbPut(uid, filename, buf) {
+  async function idbPut(docId, uid, filename, buf) {
     const idb = await openIDB();
     return new Promise((res, rej) => {
       const tx = idb.transaction('files', 'readwrite');
-      tx.objectStore('files').put({ uid, filename, buf, ts: Date.now() });
+      tx.objectStore('files').put({ docId, uid, filename, buf, ts: Date.now() });
       tx.oncomplete = () => res();
       tx.onerror = () => rej(tx.error);
     });
   }
-  async function idbGet(uid) {
+  async function idbGet(docId) {
     const idb = await openIDB();
     return new Promise((res, rej) => {
       const tx = idb.transaction('files', 'readonly');
-      const req = tx.objectStore('files').get(uid);
+      const req = tx.objectStore('files').get(docId);
       req.onsuccess = () => res(req.result || null);
       req.onerror = () => rej(req.error);
     });
   }
+  async function idbDelete(docId) {
+    const idb = await openIDB();
+    return new Promise((res, rej) => {
+      const tx = idb.transaction('files', 'readwrite');
+      tx.objectStore('files').delete(docId);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+  }
 
-  // Speichert GLB lokal (IndexedDB) und im Hintergrund auf Firebase (Storage + Firestore)
-  window.__saveGLB = async (file, vertCount, triCount) => {
+  // Zustand des Datei-Panels
+  let userFiles = [];
+  let activeDocId = null;
+  const QUOTA_BYTES = 100 * 1024 * 1024; // 100 MB weiches Limit je Benutzer
+  function fmtSize(b){
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+    return (b/1024/1024).toFixed(2) + ' MB';
+  }
+
+  // Dateiliste aus Firestore holen, rendern, Quota aktualisieren
+  async function refreshFiles({ autoLoadLatest = false } = {}) {
     if (!currentUser) return;
-    const buf = await file.arrayBuffer();
-    // 1) Lokal speichern – sofortige Wiederherstellung beim nächsten Start
-    try { await idbPut(currentUser.uid, file.name, buf); }
-    catch (e) { console.warn('IndexedDB-Speichern fehlgeschlagen:', e); }
-    // 2) Im Hintergrund auf Firebase hochladen (blockiert UI nicht, CORS-Probleme egal)
-    (async () => {
-      try {
-        const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
-        await uploadBytes(sRef(storage, path), file, { contentType: 'model/gltf-binary' });
-        await addDoc(collection(db, 'glb_loads'), {
-          uid: currentUser.uid,
-          email: currentUser.email || null,
-          displayName: currentUser.displayName || null,
-          filename: file.name,
-          vertCount,
-          triCount,
-          sizeBytes: file.size,
-          storagePath: path,
-          createdAt: serverTimestamp()
-        });
-      } catch (e) {
-        console.warn('Firebase-Upload fehlgeschlagen (lokale Kopie bleibt):', e);
-      }
-    })();
-  };
-
-  // Lädt das zuletzt hochgeladene GLB (IndexedDB zuerst, dann Firebase als Fallback)
-  async function loadLatestGLB() {
-    const info = document.getElementById('info');
-    // 1) Versuche zuerst die lokale Kopie (sofort, kein Netz, kein CORS)
     try {
-      const local = await idbGet(currentUser.uid);
-      if (local && local.buf) {
-        if (info) info.textContent = 'Lade ' + local.filename + ' (lokal)...';
-        if (window.__loadGLBBuffer) window.__loadGLBBuffer(local.filename, local.buf);
-        return;
-      }
-    } catch (e) { console.warn('IndexedDB-Lesen fehlgeschlagen:', e); }
-
-    // 2) Fallback: Firebase (nötig für Gerätewechsel / neue Browser)
-    try {
-      if (info) info.textContent = 'Suche auf Server...';
       const q = query(collection(db, 'glb_loads'), where('uid', '==', currentUser.uid));
       const snap = await getDocs(q);
-      if (snap.empty) { if (info) info.textContent = ''; return; }
-      let latest = null;
+      userFiles = [];
       snap.forEach(d => {
         const data = d.data();
         if (!data.storagePath) return;
         const ts = data.createdAt && data.createdAt.seconds ? data.createdAt.seconds : 0;
-        if (!latest || ts > latest.ts) latest = { ts, data };
+        userFiles.push({ docId: d.id, ...data, ts });
       });
-      if (!latest) { if (info) info.textContent = ''; return; }
-      if (info) info.textContent = 'Lade ' + latest.data.filename + ' vom Server...';
-      const buf = await getBytes(sRef(storage, latest.data.storagePath));
-      // Nach erfolgreichem Server-Download auch lokal cachen
-      try { await idbPut(currentUser.uid, latest.data.filename, buf); } catch {}
-      if (window.__loadGLBBuffer) window.__loadGLBBuffer(latest.data.filename, buf);
+      userFiles.sort((a, b) => b.ts - a.ts);
     } catch (e) {
-      // Server-Fehler (z. B. CORS) sind nicht kritisch – lokaler Cache reicht meist.
-      // In der Konsole als Warnung statt Fehler ausgeben.
-      console.warn('Server-Wiederherstellen übersprungen:', e.code || e.message);
-      if (info) info.textContent = '';
+      console.warn('Dateiliste-Abruf fehlgeschlagen:', e.code || e.message);
+      userFiles = [];
+    }
+    renderFiles();
+    updateQuota();
+    if (autoLoadLatest && userFiles.length > 0) await loadFile(userFiles[0]);
+  }
+
+  function renderFiles() {
+    fpList.innerHTML = '';
+    if (userFiles.length === 0) {
+      fpList.innerHTML = '<div id="fpEmpty">Noch keine Dateien.<br>Klicke unten auf „+ GLB hochladen".</div>';
+      return;
+    }
+    for (const f of userFiles) {
+      const item = document.createElement('div');
+      item.className = 'fpItem' + (f.docId === activeDocId ? ' active' : '');
+      const name = document.createElement('span');
+      name.className = 'fpName'; name.textContent = f.filename;
+      const size = document.createElement('span');
+      size.className = 'fpSize'; size.textContent = fmtSize(f.sizeBytes || 0);
+      const del = document.createElement('button');
+      del.className = 'fpDel'; del.textContent = '×'; del.title = 'Datei löschen';
+      del.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('„' + f.filename + '" endgültig löschen?')) return;
+        await deleteFile(f);
+      });
+      item.appendChild(name); item.appendChild(size); item.appendChild(del);
+      item.addEventListener('click', () => loadFile(f));
+      fpList.appendChild(item);
     }
   }
+
+  function updateQuota() {
+    const total = userFiles.reduce((s, f) => s + (f.sizeBytes || 0), 0);
+    const pct = Math.min(100, (total / QUOTA_BYTES) * 100);
+    fpQuotaVal.textContent = fmtSize(total) + ' / ' + (QUOTA_BYTES/1024/1024) + ' MB';
+    fpQuotaFill.style.width = pct + '%';
+    fpQuotaFill.classList.remove('warn', 'full');
+    if (pct >= 90) fpQuotaFill.classList.add('full');
+    else if (pct >= 70) fpQuotaFill.classList.add('warn');
+  }
+
+  // Konkrete Datei laden (IDB zuerst, Firebase als Fallback)
+  async function loadFile(f) {
+    const info = document.getElementById('info');
+    activeDocId = f.docId;
+    renderFiles();
+    try {
+      const local = await idbGet(f.docId);
+      if (local && local.buf) {
+        if (info) info.textContent = 'Lade ' + f.filename + ' (lokal)...';
+        if (window.__loadGLBBuffer) window.__loadGLBBuffer(f.filename, local.buf);
+        return;
+      }
+    } catch (e) { console.warn('IndexedDB-Lesen fehlgeschlagen:', e); }
+    try {
+      if (info) info.textContent = 'Lade ' + f.filename + ' vom Server...';
+      const buf = await getBytes(sRef(storage, f.storagePath));
+      try { await idbPut(f.docId, currentUser.uid, f.filename, buf); } catch {}
+      if (window.__loadGLBBuffer) window.__loadGLBBuffer(f.filename, buf);
+    } catch (e) {
+      console.warn('Server-Laden übersprungen:', e.code || e.message);
+      if (info) info.textContent = 'Nur am Ursprungsgerät verfügbar (' + (e.code || 'CORS') + ')';
+    }
+  }
+
+  // Datei aus Storage + Firestore + IDB löschen
+  async function deleteFile(f) {
+    try { await deleteObject(sRef(storage, f.storagePath)); }
+    catch (e) { console.warn('Storage-Löschen fehlgeschlagen:', e.code || e.message); }
+    try { await deleteDoc(doc(db, 'glb_loads', f.docId)); }
+    catch (e) { console.warn('Firestore-Löschen fehlgeschlagen:', e.code || e.message); }
+    try { await idbDelete(f.docId); } catch {}
+    if (activeDocId === f.docId) {
+      activeDocId = null;
+      if (window.__resetViewer) window.__resetViewer();
+    }
+    await refreshFiles();
+  }
+
+  // Speichert GLB: Firestore-Doc (mit storagePath), lokaler Cache, Storage im Hintergrund
+  window.__saveGLB = async (file, vertCount, triCount) => {
+    if (!currentUser) return;
+    const buf = await file.arrayBuffer();
+    try {
+      const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
+      const docRef = await addDoc(collection(db, 'glb_loads'), {
+        uid: currentUser.uid,
+        email: currentUser.email || null,
+        displayName: currentUser.displayName || null,
+        filename: file.name,
+        vertCount, triCount,
+        sizeBytes: file.size,
+        storagePath: path,
+        createdAt: serverTimestamp()
+      });
+      try { await idbPut(docRef.id, currentUser.uid, file.name, buf); }
+      catch (e) { console.warn('IndexedDB-Speichern fehlgeschlagen:', e); }
+      // Storage-Upload im Hintergrund (CORS-Schreiben funktioniert ohne Spezialkonfig)
+      (async () => {
+        try { await uploadBytes(sRef(storage, path), file, { contentType: 'model/gltf-binary' }); }
+        catch (e) { console.warn('Firebase-Upload fehlgeschlagen (lokale Kopie bleibt):', e); }
+      })();
+      activeDocId = docRef.id;
+      await refreshFiles();
+    } catch (e) {
+      console.warn('Speichern fehlgeschlagen:', e);
+    }
+  };
+
+  // Upload aus dem Panel: leitet die Datei an den Viewer weiter (Parsing + __saveGLB)
+  window.__uploadFromPanel = async (file) => {
+    if (!file || !currentUser) return;
+    if (window.__loadFileFromInput) await window.__loadFileFromInput(file);
+  };
 
   // Getter für den Anmeldezustand (vom Viewer genutzt, um Uploads zu gaten)
   window.__isAuthed = () => !!currentUser;
@@ -650,6 +826,8 @@ async function loadFile(file){
     }
   }catch(e){info.textContent='Fehler: '+e.message;console.error(e);}
 }
+// Für das Datei-Panel: akzeptiert ein File-Objekt und ruft loadFile auf
+window.__loadFileFromInput=loadFile;
 
 // Lädt ein GLB aus einem ArrayBuffer (für Wiederherstellung nach Anmeldung)
 window.__loadGLBBuffer=function(name,buf){

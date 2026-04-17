@@ -9,12 +9,16 @@ service firebase.storage {
     match /glb/{uid}/{fileName} {
       // Nur der Eigentümer darf lesen
       allow read:   if request.auth != null && request.auth.uid == uid;
-      // Nur der Eigentümer darf schreiben; maximal 50 MB; nur GLB-Inhaltstyp
-      allow write:  if request.auth != null
+      // Erstellen: nur der Eigentümer, max. 50 MB, nur GLB-Inhaltstyp
+      allow create: if request.auth != null
                     && request.auth.uid == uid
                     && request.resource.size < 50 * 1024 * 1024
                     && (request.resource.contentType == 'model/gltf-binary'
                         || request.resource.contentType == 'application/octet-stream');
+      // Löschen: nur der Eigentümer
+      allow delete: if request.auth != null && request.auth.uid == uid;
+      // Überschreiben ist nicht erlaubt
+      allow update: if false;
     }
 
     // Standard: alles andere verweigern
