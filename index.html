@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>CAD Cut Viewer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#1b1e24;font-family:system-ui,sans-serif;color:#c8ccd4}
+canvas{display:block;width:100%;height:100%}
+#drop{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;
+  width:300px;padding:28px;border:2px dashed rgba(74,142,255,0.5);border-radius:12px;
+  display:flex;align-items:center;justify-content:center;text-align:center;flex-direction:column;
+  color:#4a8eff;font-size:13px;line-height:1.7;cursor:pointer;background:rgba(74,142,255,0.04)}
+#drop:hover{background:rgba(74,142,255,0.1)}
+#drop.hide{display:none!important}
+#info{position:fixed;top:10px;left:120px;color:#4a8eff;font:12px monospace;z-index:10}
+#ctrl{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:10;
+  background:rgba(20,22,28,0.92);border:1px solid rgba(74,142,255,0.2);border-radius:10px;
+  padding:12px 20px;display:none;flex-direction:column;gap:8px;min-width:360px;
+  backdrop-filter:blur(10px);font:12px monospace;color:#b8b8cc}
+.sr{display:flex;align-items:center;gap:10px}
+.lb{width:50px;font-size:10px;color:#5a5a7a;text-transform:uppercase}
+.sr input[type=range]{flex:1;-webkit-appearance:none;background:rgba(74,142,255,0.15);height:3px;border-radius:2px}
+.sr input::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#4a8eff;cursor:pointer}
+.vl{width:44px;text-align:right;font-size:11px;color:#4a8eff}
+.ab{padding:3px 9px;font-size:10px;border:1px solid rgba(74,142,255,0.25);border-radius:4px;
+  background:transparent;color:#5a5a7a;cursor:pointer;font-family:monospace}
+.ab.on{background:rgba(74,142,255,0.2);color:#4a8eff;border-color:#4a8eff}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="drop" onclick="document.getElementById('fi').click()">
+  <div style="font-size:28px;margin-bottom:8px;opacity:0.5">&#128193;</div>
+  STP / GLB / STL<br>hier ablegen oder klicken<br>
+  <input type="file" id="fi" accept=".glb,.stp,.step,.stl" style="display:none">
+</div>
+<div id="info"></div>
+<div id="ctrl">
+  <div class="sr"><span class="lb">Schnitt</span>
+    <input type="range" id="cutR" min="0" max="1" step="0.002" value="0.5">
+    <span class="vl" id="cutV">50%</span>
+    <button class="ab" data-a="0">X</button>
+    <button class="ab" data-a="1">Y</button>
+    <button class="ab on" data-a="2">Z</button>
+  </div>
+</div>
+<script>
+// No embedded data
+</script>
+<script>
+"use strict";
+const cv=document.getElementById('c');
+const gl=cv.getContext('webgl2',{stencil:true,antialias:true});
+const info=document.getElementById('info');
+if(!gl){info.textContent='WebGL2 not available';throw'no gl';}
+
+function resize(){const d=window.devicePixelRatio||1;cv.width=cv.clientWidth*d;cv.height=cv.clientHeight*d;gl.viewport(0,0,cv.width,cv.height);}
+resize();window.addEventListener('resize',resize);
+
+/* ═══ Shaders ═══ */
+function mkS(t,s){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(sh));return sh;}
+function mkP(v,f){const p=gl.createProgram();gl.attachShader(p,mkS(gl.VERTEX_SHADER,v));gl.attachShader(p,mkS(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);return p;}
+
+const pMain=mkP(`#version 300 es
+layout(location=0) in vec3 aP;layout(location=1) in vec3 aN;
+uniform mat4 uMVP;out vec3 vN,vW;
+void main(){vW=aP;vN=aN;gl_Position=uMVP*vec4(aP,1);}
+`,`#version 300 es
+precision highp float;uniform vec4 uClip;uniform vec3 uC;in vec3 vN,vW;out vec4 f;
+void main(){if(dot(vec4(vW,1),uClip)<0.)discard;
+  vec3 n=normalize(gl_FrontFacing?vN:-vN);
+  float d=max(dot(n,normalize(vec3(1,.8,.5))),0.)*.55+max(dot(n,normalize(vec3(-.5,-.3,-.5))),0.)*.2;
+  f=vec4(uC*(.32+d),1);}`);
+
+const pSten=mkP(`#version 300 es
+layout(location=0) in vec3 aP;uniform mat4 uMVP;out vec3 vW;
+void main(){vW=aP;gl_Position=uMVP*vec4(aP,1);}
+`,`#version 300 es
+precision highp float;uniform vec4 uClip;in vec3 vW;out vec4 f;
+void main(){if(dot(vec4(vW,1),uClip)<0.)discard;f=vec4(0);}`);
+
+const pCap=mkP(`#version 300 es
+layout(location=0) in vec3 aP;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec4(aP,1);}
+`,`#version 300 es
+precision highp float;uniform vec3 uCC;out vec4 f;void main(){f=vec4(uCC,1);}`);
+
+const pLine=mkP(`#version 300 es
+layout(location=0) in vec3 aP;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec4(aP,1);}
+`,`#version 300 es
+precision highp float;uniform vec4 uLC;out vec4 f;void main(){f=uLC;}`);
+
+/* ═══ Mesh state ═══ */
+var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
+
+function uploadMesh(positions,normals,indices){
+  MV=positions;MN=normals;MI=indices;
+  const nv=MV.length/3;
+  const inter=new Float32Array(nv*6);
+  for(let i=0;i<nv;i++){
+    inter[i*6]=MV[i*3];inter[i*6+1]=MV[i*3+1];inter[i*6+2]=MV[i*3+2];
+    inter[i*6+3]=MN[i*3];inter[i*6+4]=MN[i*3+1];inter[i*6+5]=MN[i*3+2];
+  }
+  if(meshVao)gl.deleteVertexArray(meshVao);
+  meshVao=gl.createVertexArray();gl.bindVertexArray(meshVao);
+  const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,inter,gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,24,0);
+  gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,3,gl.FLOAT,false,24,12);
+  meshIB=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,meshIB);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,MI,gl.STATIC_DRAW);
+
+  // Compute bbox
+  let xn=1e9,yn=1e9,zn=1e9,xx=-1e9,yx=-1e9,zx=-1e9;
+  for(let i=0;i<nv;i++){
+    const x=MV[i*3],y=MV[i*3+1],z=MV[i*3+2];
+    if(x<xn)xn=x;if(y<yn)yn=y;if(z<zn)zn=z;
+    if(x>xx)xx=x;if(y>yx)yx=y;if(z>zx)zx=z;
+  }
+  bMin=[xn,yn,zn];bMax=[xx,yx,zx];
+  target=[(xn+xx)/2,(yn+yx)/2,(zn+zx)/2];
+  maxDim=Math.max(xx-xn,yx-yn,zx-zn);
+  oSize=maxDim*0.65;
+  meshLoaded=true;
+  lastCA=-1;
+  document.getElementById('ctrl').style.display='flex';
+  document.getElementById('drop').classList.add('hide');
+  if(!document.getElementById('loadBtn')){
+    const lb=document.createElement('button');lb.id='loadBtn';
+    lb.textContent='\u{1F4C2} Datei laden';
+    lb.style.cssText='position:fixed;top:10px;left:10px;z-index:20;background:rgba(20,22,28,0.9);border:1px solid rgba(74,142,255,0.3);border-radius:7px;padding:7px 14px;color:#4a8eff;cursor:pointer;font:12px system-ui;backdrop-filter:blur(8px)';
+    lb.onclick=()=>document.getElementById('fi').click();
+    document.body.appendChild(lb);
+  }
+}
+
+/* ═══ Cap plane VAO ═══ */
+const capVao=gl.createVertexArray();gl.bindVertexArray(capVao);
+const cb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,cb);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-9999,-9999,0,9999,-9999,0,-9999,9999,0,9999,9999,0]),gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+
+/* ═══ Contour VAO ═══ */
+const cVao=gl.createVertexArray();gl.bindVertexArray(cVao);
+const cBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,cBuf);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+var cCount=0;
+
+/* ═══ Math ═══ */
+const M4=()=>new Float32Array(16);
+function I4(m){m.fill(0);m[0]=m[5]=m[10]=m[15]=1;return m;}
+function ortho(l,r,b,t,n,f){const m=M4();m[0]=2/(r-l);m[5]=2/(t-b);m[10]=-2/(f-n);m[12]=-(r+l)/(r-l);m[13]=-(t+b)/(t-b);m[14]=-(f+n)/(f-n);m[15]=1;return m;}
+function mul(a,b){const r=M4();for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[i+k*4]*b[k+j*4];r[i+j*4]=s;}return r;}
+function q2m(q){const[x,y,z,w]=q;const m=M4();m[0]=1-2*(y*y+z*z);m[1]=2*(x*y+z*w);m[2]=2*(x*z-y*w);m[4]=2*(x*y-z*w);m[5]=1-2*(x*x+z*z);m[6]=2*(y*z+x*w);m[8]=2*(x*z+y*w);m[9]=2*(y*z-x*w);m[10]=1-2*(x*x+y*y);m[15]=1;return m;}
+function trans(x,y,z){const m=M4();I4(m);m[12]=x;m[13]=y;m[14]=z;return m;}
+function scl(s){const m=M4();I4(m);m[0]=m[5]=m[10]=s;return m;}
+function rotX(a){const m=M4();I4(m);m[5]=Math.cos(a);m[6]=Math.sin(a);m[9]=-Math.sin(a);m[10]=Math.cos(a);return m;}
+function rotY(a){const m=M4();I4(m);m[0]=Math.cos(a);m[2]=-Math.sin(a);m[8]=Math.sin(a);m[10]=Math.cos(a);return m;}
+
+/* ═══ State ═══ */
+var arcQ=[0,0,0,1];
+function qm(a,b){return[a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0],a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2]];}
+function qn(q){const l=Math.sqrt(q[0]**2+q[1]**2+q[2]**2+q[3]**2);return q.map(x=>x/l);}
+arcQ=qn([Math.sin(0.25),0.12,0.05,Math.cos(0.25)]);
+
+var oSize=1,target=[0,0,0],clipT=0.5,clipAxis=2;
+function clipVal(){return bMin[clipAxis]+clipT*(bMax[clipAxis]-bMin[clipAxis]);}
+function capMat(){const v=clipVal(),e=-maxDim*0.0003;
+  if(clipAxis===0)return mul(trans(v+e,0,0),rotY(Math.PI/2));
+  if(clipAxis===1)return mul(trans(0,v+e,0),rotX(-Math.PI/2));
+  return trans(0,0,v+e);}
+
+function computeContour(){
+  if(!meshLoaded)return;
+  const val=clipVal(),ax=clipAxis,segs=[];
+  for(let t=0;t<MI.length/3;t++){
+    const i0=MI[t*3],i1=MI[t*3+1],i2=MI[t*3+2];
+    const d0=MV[i0*3+ax]-val,d1=MV[i1*3+ax]-val,d2=MV[i2*3+ax]-val;
+    const pts=[];
+    function eh(ia,ib,da,db){if((da>0)!==(db>0)){const t=da/(da-db);
+      pts.push(MV[ia*3]+(MV[ib*3]-MV[ia*3])*t,MV[ia*3+1]+(MV[ib*3+1]-MV[ia*3+1])*t,MV[ia*3+2]+(MV[ib*3+2]-MV[ia*3+2])*t);}}
+    eh(i0,i1,d0,d1);eh(i1,i2,d1,d2);eh(i2,i0,d2,d0);
+    if(pts.length>=6)segs.push(...pts.slice(0,6));
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER,cBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(segs),gl.DYNAMIC_DRAW);
+  cCount=segs.length/3;
+}
+var lastCA=-1,lastCT=-1;
+function updateCut(){if(clipAxis!==lastCA||clipT!==lastCT){lastCA=clipAxis;lastCT=clipT;computeContour();}}
+
+/* ═══ Input ═══ */
+var drag=false,dv0,dq0,pan=false,pmx,pmy,pt0;
+function arcP(mx,my){const r=Math.min(cv.clientWidth,cv.clientHeight)*0.4;const x=(mx-cv.clientWidth/2)/r,y=-(my-cv.clientHeight/2)/r,l2=x*x+y*y;if(l2<=1)return[x,y,Math.sqrt(1-l2)];const l=Math.sqrt(l2);return[x/l,y/l,0];}
+function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+cv.onmousedown=e=>{e.preventDefault();if(e.button===0){drag=true;dv0=arcP(e.clientX,e.clientY);dq0=[...arcQ];}else{pan=true;pmx=e.clientX;pmy=e.clientY;pt0=[...target];}};
+onmousemove=e=>{if(drag){const v=arcP(e.clientX,e.clientY);const cr=cross(dv0,v);const d=dot3(dv0,v);arcQ=qn(qm([cr[0],cr[1],cr[2],1+d],dq0));}
+  if(pan){const s=oSize*2/cv.clientHeight;const rm=q2m(arcQ);const dx=(e.clientX-pmx)*s,dy=(e.clientY-pmy)*s;
+    target=[pt0[0]-rm[0]*dx+rm[4]*dy,pt0[1]-rm[1]*dx+rm[5]*dy,pt0[2]-rm[2]*dx+rm[6]*dy];}};
+onmouseup=()=>{drag=false;pan=false;};
+cv.oncontextmenu=e=>e.preventDefault();
+cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0.001,Math.min(100,oSize));};
+document.getElementById('cutR').oninput=e=>{clipT=+e.target.value;document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';lastCA=-1;};
+document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));b.classList.add('on');clipAxis=+b.dataset.a;lastCA=-1;});
+
+/* ═══ GLB Loader ═══ */
+function parseGLB(buf){
+  const dv=new DataView(buf);
+  const jsonLen=dv.getUint32(12,true);
+  const json=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,20,jsonLen)));
+  const binOff=20+jsonLen+8;
+  const bin=new Uint8Array(buf,binOff);
+  const bvs=json.bufferViews,accs=json.accessors;
+
+  function readAcc(ai){
+    const a=accs[ai],bv=bvs[a.bufferView];
+    const bvo=bv.byteOffset||0,ao=a.byteOffset||0,stride=bv.byteStride||0;
+    const ct=a.componentType,cnt=a.count;
+    const nc={'SCALAR':1,'VEC2':2,'VEC3':3,'VEC4':4}[a.type];
+    const dt=ct===5126?Float32Array:ct===5125?Uint32Array:Uint16Array;
+    const cs=dt.BYTES_PER_ELEMENT;
+    const start=bvo+ao;
+    if(!stride||stride===nc*cs){
+      return new dt(bin.buffer,bin.byteOffset+start,cnt*nc);
+    }
+    const out=new dt(cnt*nc);
+    for(let i=0;i<cnt;i++){
+      const off=start+i*stride;
+      for(let j=0;j<nc;j++)out[i*nc+j]=new dt(bin.buffer,bin.byteOffset+off+j*cs,1)[0];
+    }
+    return out;
+  }
+
+  // Get node transform
+  let scale=1;
+  if(json.nodes&&json.nodes[0]&&json.nodes[0].matrix)scale=json.nodes[0].matrix[0];
+  else if(json.nodes&&json.nodes[0]&&json.nodes[0].scale)scale=json.nodes[0].scale[0];
+
+  const allP=[],allN=[],allI=[];
+  let voff=0;
+  for(const mesh of json.meshes){
+    for(const prim of mesh.primitives){
+      const posAcc=prim.attributes.POSITION;
+      const norAcc=prim.attributes.NORMAL;
+      const pos=readAcc(posAcc);
+      const nor=norAcc!==undefined?readAcc(norAcc):null;
+      const nv=accs[posAcc].count;
+      // Apply scale
+      const sp=new Float32Array(nv*3);
+      for(let i=0;i<nv*3;i++)sp[i]=pos[i]*scale;
+      allP.push(sp);
+      if(nor){const sn=new Float32Array(nv*3);for(let i=0;i<nv*3;i++)sn[i]=nor[i];allN.push(sn);}
+      else{const sn=new Float32Array(nv*3);allN.push(sn);}
+      if(prim.indices!==undefined){
+        const idx=readAcc(prim.indices);
+        const si=new Uint32Array(idx.length);
+        for(let i=0;i<idx.length;i++)si[i]=idx[i]+voff;
+        allI.push(si);
+      }
+      voff+=nv;
+    }
+  }
+  const P=concat32(allP),N=concat32(allN),I=concatU32(allI);
+  // Compute normals if missing
+  for(let i=0;i<I.length;i+=3){
+    const i0=I[i],i1=I[i+1],i2=I[i+2];
+    const ax=P[i1*3]-P[i0*3],ay=P[i1*3+1]-P[i0*3+1],az=P[i1*3+2]-P[i0*3+2];
+    const bx=P[i2*3]-P[i0*3],by=P[i2*3+1]-P[i0*3+1],bz=P[i2*3+2]-P[i0*3+2];
+    const nx=ay*bz-az*by,ny=az*bx-ax*bz,nz=ax*by-ay*bx;
+    N[i0*3]+=nx;N[i0*3+1]+=ny;N[i0*3+2]+=nz;
+    N[i1*3]+=nx;N[i1*3+1]+=ny;N[i1*3+2]+=nz;
+    N[i2*3]+=nx;N[i2*3+1]+=ny;N[i2*3+2]+=nz;
+  }
+  for(let i=0;i<N.length;i+=3){const l=Math.sqrt(N[i]**2+N[i+1]**2+N[i+2]**2);if(l>0){N[i]/=l;N[i+1]/=l;N[i+2]/=l;}}
+  return{positions:P,normals:N,indices:I};
+}
+function concat32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Float32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
+function concatU32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Uint32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
+
+/* ═══ File handling ═══ */
+const dropEl=document.getElementById('drop');
+dropEl.addEventListener('dragover',e=>{e.preventDefault();});
+dropEl.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer.files[0])loadFile(e.dataTransfer.files[0]);});
+document.getElementById('fi').onchange=e=>{if(e.target.files[0])loadFile(e.target.files[0]);};
+
+var occtReady=false,occtMod=null;
+async function loadOCCT(){
+  if(occtReady)return occtMod;
+  info.textContent='STEP-Kernel wird geladen (~15 MB)...';
+  const urls=[
+    {js:'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js',b:'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/'},
+    {js:'https://unpkg.com/occt-import-js@0.0.23/dist/occt-import-js.js',b:'https://unpkg.com/occt-import-js@0.0.23/dist/'},
+  ];
+  for(const u of urls){
+    try{
+      await new Promise((r,j)=>{const s=document.createElement('script');s.src=u.js;s.onload=r;s.onerror=j;document.head.appendChild(s);});
+      occtMod=await occtimportjs({locateFile:f=>u.b+f});
+      occtReady=true;return occtMod;
+    }catch(e){console.warn(e);}
+  }
+  throw new Error('STEP-Kernel nicht ladbar. Bitte Internet prüfen.');
+}
+
+function parseSTP(buf){
+  const r=occtMod.ReadStepFile(new Uint8Array(buf),{linearDeflection:0.1,angularDeflection:0.5});
+  if(!r||!r.success||!r.meshes||!r.meshes.length)throw new Error('STEP nicht lesbar');
+  const aP=[],aN=[],aI=[];let vo=0;
+  for(const m of r.meshes){
+    const pa=m.attributes?.position?.array;if(!pa||!pa.length)continue;
+    const nv=pa.length/3;
+    const p=new Float32Array(pa.length);for(let i=0;i<pa.length;i++)p[i]=pa[i];aP.push(p);
+    if(m.attributes?.normal?.array){const n=new Float32Array(m.attributes.normal.array.length);for(let i=0;i<n.length;i++)n[i]=m.attributes.normal.array[i];aN.push(n);}
+    else aN.push(new Float32Array(nv*3));
+    if(m.index?.length){const x=new Uint32Array(m.index.length);for(let i=0;i<x.length;i++)x[i]=m.index[i]+vo;aI.push(x);}
+    vo+=nv;
+  }
+  const P=cf32(aP),N=cf32(aN),I=cu32(aI);
+  N.fill(0);
+  for(let i=0;i<I.length;i+=3){const a=I[i],b=I[i+1],c=I[i+2];
+    const ex=P[b*3]-P[a*3],ey=P[b*3+1]-P[a*3+1],ez=P[b*3+2]-P[a*3+2];
+    const fx=P[c*3]-P[a*3],fy=P[c*3+1]-P[a*3+1],fz=P[c*3+2]-P[a*3+2];
+    const nx=ey*fz-ez*fy,ny=ez*fx-ex*fz,nz=ex*fy-ey*fx;
+    N[a*3]+=nx;N[a*3+1]+=ny;N[a*3+2]+=nz;N[b*3]+=nx;N[b*3+1]+=ny;N[b*3+2]+=nz;N[c*3]+=nx;N[c*3+1]+=ny;N[c*3+2]+=nz;}
+  for(let i=0;i<N.length;i+=3){const l=Math.sqrt(N[i]**2+N[i+1]**2+N[i+2]**2);if(l>0){N[i]/=l;N[i+1]/=l;N[i+2]/=l;}}
+  return{positions:P,normals:N,indices:I};
+}
+function cf32(a){let t=0;for(const x of a)t+=x.length;const r=new Float32Array(t);let o=0;for(const x of a){r.set(x,o);o+=x.length;}return r;}
+function cu32(a){let t=0;for(const x of a)t+=x.length;const r=new Uint32Array(t);let o=0;for(const x of a){r.set(x,o);o+=x.length;}return r;}
+
+function parseSTL(buf){
+  const dv=new DataView(buf),n=dv.getUint32(80,true);
+  if(!n)throw new Error('Leere STL');
+  const p=new Float32Array(n*9),nr=new Float32Array(n*9);let o=84;
+  for(let i=0;i<n;i++){const nx=dv.getFloat32(o,true),ny=dv.getFloat32(o+4,true),nz=dv.getFloat32(o+8,true);o+=12;
+    for(let v=0;v<3;v++){p[i*9+v*3]=dv.getFloat32(o,true);p[i*9+v*3+1]=dv.getFloat32(o+4,true);p[i*9+v*3+2]=dv.getFloat32(o+8,true);
+      nr[i*9+v*3]=nx;nr[i*9+v*3+1]=ny;nr[i*9+v*3+2]=nz;o+=12;}o+=2;}
+  const idx=new Uint32Array(n*3);for(let i=0;i<n*3;i++)idx[i]=i;
+  return{positions:p,normals:nr,indices:idx};
+}
+
+async function loadFile(file){
+  const nm=file.name.toLowerCase();
+  info.textContent='Lade '+file.name+'...';
+  try{
+    const buf=await file.arrayBuffer();let m;
+    if(nm.endsWith('.stp')||nm.endsWith('.step')){await loadOCCT();m=parseSTP(buf);}
+    else if(nm.endsWith('.stl')){m=parseSTL(buf);}
+    else{m=parseGLB(buf);}
+    uploadMesh(m.positions,m.normals,m.indices);
+    info.textContent=file.name+': '+m.positions.length/3+' verts, '+m.indices.length/3+' tris';
+  }catch(e){info.textContent='Fehler: '+e.message;console.error(e);}
+}
+
+/* ═══ Load embedded test mesh ═══ */
+// File drop ready
+
+/* ═══ Render ═══ */
+function render(){
+  requestAnimationFrame(render);resize();
+  if(!meshLoaded)return;
+  updateCut();
+  const asp=cv.width/cv.height,rot=q2m(arcQ);
+  const cd=[rot[8],rot[9],rot[10]];
+  const cp=[target[0]+cd[0]*5000,target[1]+cd[1]*5000,target[2]+cd[2]*5000];
+  const view=M4();view[0]=rot[0];view[1]=rot[4];view[2]=rot[8];view[4]=rot[1];view[5]=rot[5];view[6]=rot[9];
+  view[8]=rot[2];view[9]=rot[6];view[10]=rot[10];
+  view[12]=-(view[0]*cp[0]+view[4]*cp[1]+view[8]*cp[2]);view[13]=-(view[1]*cp[0]+view[5]*cp[1]+view[9]*cp[2]);
+  view[14]=-(view[2]*cp[0]+view[6]*cp[1]+view[10]*cp[2]);view[15]=1;
+  const proj=ortho(-oSize*asp,oSize*asp,-oSize,oSize,1,100000);
+  const vp=mul(proj,view);
+  const cn=[0,0,0];cn[clipAxis]=-1;const cv4=[cn[0],cn[1],cn[2],clipVal()];
+
+  gl.clearColor(0.106,0.118,0.141,1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT|gl.STENCIL_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+
+  // PASS 1: Stencil counting (no color, no depth write)
+  gl.enable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+  gl.colorMask(false,false,false,false);gl.depthMask(false);
+  gl.useProgram(pSten);gl.bindVertexArray(meshVao);
+  gl.uniformMatrix4fv(gl.getUniformLocation(pSten,'uMVP'),false,vp);
+  gl.uniform4fv(gl.getUniformLocation(pSten,'uClip'),cv4);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.FRONT);gl.stencilFunc(gl.ALWAYS,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.INCR_WRAP);
+  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  gl.cullFace(gl.BACK);gl.stencilOp(gl.KEEP,gl.KEEP,gl.DECR_WRAP);
+  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  gl.disable(gl.CULL_FACE);
+  gl.colorMask(true,true,true,true);gl.depthMask(true);
+  gl.disable(gl.STENCIL_TEST);
+
+  // PASS 2: Clipped model (FrontSide, writes depth)
+  gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);
+  gl.useProgram(pMain);gl.bindVertexArray(meshVao);
+  gl.uniformMatrix4fv(gl.getUniformLocation(pMain,'uMVP'),false,vp);
+  gl.uniform4fv(gl.getUniformLocation(pMain,'uClip'),cv4);
+  gl.uniform3fv(gl.getUniformLocation(pMain,'uC'),[0.33,0.6,0.93]);
+  gl.drawElements(gl.TRIANGLES,MI.length,gl.UNSIGNED_INT,0);
+  gl.disable(gl.CULL_FACE);
+
+  // PASS 3: Cap (stencil!=0, depthTest ON, depthWrite OFF)
+  gl.enable(gl.STENCIL_TEST);gl.stencilMask(0x00);
+  gl.stencilFunc(gl.NOTEQUAL,0,0xff);gl.stencilOp(gl.KEEP,gl.KEEP,gl.KEEP);
+  gl.depthMask(false);
+  gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.0,1.0);
+  gl.useProgram(pCap);gl.bindVertexArray(capVao);
+  gl.uniformMatrix4fv(gl.getUniformLocation(pCap,'uMVP'),false,mul(vp,capMat()));
+  gl.uniform3fv(gl.getUniformLocation(pCap,'uCC'),[0.2,0.78,0.88]);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  gl.disable(gl.POLYGON_OFFSET_FILL);
+  gl.depthMask(true);gl.disable(gl.STENCIL_TEST);gl.stencilMask(0xff);
+
+  // PASS 4: Contour lines (always on top of model)
+  if(cCount>0){
+    gl.useProgram(pLine);gl.bindVertexArray(cVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pLine,'uMVP'),false,vp);
+    gl.uniform4fv(gl.getUniformLocation(pLine,'uLC'),[0,0,0,1]);
+    gl.depthFunc(gl.ALWAYS);gl.drawArrays(gl.LINES,0,cCount);gl.depthFunc(gl.LEQUAL);
+  }
+}
+render();
+</script></body></html>
