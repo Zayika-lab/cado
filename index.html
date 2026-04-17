@@ -159,6 +159,10 @@ canvas{display:block;width:100%;height:100%}
     <button class="ab" data-a="1">Y</button>
     <button class="ab on" data-a="2">Z</button>
   </div>
+  <div class="sr"><span class="lb">Kugel</span>
+    <input type="range" id="sphR" min="0.1" max="1.5" step="0.02" value="0.54">
+    <span class="vl" id="sphV">0.54</span>
+  </div>
 </div>
 
 <!-- Firebase-Initialisierung (Modulskript, wird deferred geladen) -->
@@ -658,13 +662,13 @@ function genSphereWireframe(nLat,nLon){
   }
   return new Float32Array(v);
 }
-const sphereVerts=genSphereWireframe(8,16);
+const sphereVerts=genSphereWireframe(14,28);
 const sphereVao=gl.createVertexArray();gl.bindVertexArray(sphereVao);
 const sphereBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sphereBuf);
 gl.bufferData(gl.ARRAY_BUFFER,sphereVerts,gl.STATIC_DRAW);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
 const sphereVertCount=sphereVerts.length/3;
-const sphereScale=0.54; // relativ zur Kamera-Orthogrösse
+var _sphereScale=0.54; // relativ zur Kamera-Orthogrösse — per Slider änderbar
 
 /* ═══ Matrix-Mathematik ═══ */
 const M4=()=>new Float32Array(16);
@@ -709,20 +713,95 @@ function computeContour(){
 var lastCA=-1,lastCT=-1;
 function updateCut(){if(clipAxis!==lastCA||clipT!==lastCT){lastCA=clipAxis;lastCT=clipT;computeContour();}}
 
-/* ═══ Maus-Eingabe (Rotation, Pan, Zoom) ═══ */
-var drag=false,dv0,dq0,pan=false,pmx,pmy,pt0;
-function arcP(mx,my){const r=Math.min(cv.clientWidth,cv.clientHeight)*0.4;const x=(mx-cv.clientWidth/2)/r,y=-(my-cv.clientHeight/2)/r,l2=x*x+y*y;if(l2<=1)return[x,y,Math.sqrt(1-l2)];const l=Math.sqrt(l2);return[x/l,y/l,0];}
+/* ═══ Maus-Eingabe (mittlere Taste = Rotation, linke Taste = Pan, Rad = Zoom) ═══ */
 function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
 function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
-cv.onmousedown=e=>{e.preventDefault();if(e.button===0){drag=true;dv0=arcP(e.clientX,e.clientY);dq0=[...arcQ];}else{pan=true;pmx=e.clientX;pmy=e.clientY;pt0=[...target];}};
-window.onmousemove=e=>{if(drag){const v=arcP(e.clientX,e.clientY);const cr=cross(dv0,v);const d=dot3(dv0,v);arcQ=qn(qm([cr[0],cr[1],cr[2],1+d],dq0));}
-  if(pan){const s=oSize*2/cv.clientHeight;const rm=q2m(arcQ);const dx=(e.clientX-pmx)*s,dy=(e.clientY-pmy)*s;
-    target=[pt0[0]-rm[0]*dx+rm[4]*dy,pt0[1]-rm[1]*dx+rm[5]*dy,pt0[2]-rm[2]*dx+rm[6]*dy];}};
-window.onmouseup=()=>{drag=false;pan=false;};
+
+// Bildschirm-Pixelradius der Arcball-Kugel, synchron mit ihrer visuellen Grösse
+function arcScreenR(){return cv.clientHeight*_sphereScale*0.5;}
+// Shoemake-Projektion des Mauspunktes auf die Einheitskugel (innerhalb)
+function shoemake(mx,my,cx,cy,r){
+  const x=(mx-cx)/r, y=-(my-cy)/r, d=x*x+y*y;
+  if(d>1){const s=1/Math.sqrt(d);return[x*s,y*s,0];}
+  return[x,y,Math.sqrt(1-d)];
+}
+// Winkel-Wrap auf (-π,π]
+function wrapDelta(d){return Math.atan2(Math.sin(d),Math.cos(d));}
+
+// Arcball-Zustand
+var arcOn=false, arcOut=false, arc_cx=0, arc_cy=0, arc_r=1;
+var arc_q0=[0,0,0,1], arc_v0=[0,0,0], arc_startAngle=0;
+
+function arcBegin(mx,my){
+  arcOn=true;
+  arc_cx=cv.clientWidth/2; arc_cy=cv.clientHeight/2; arc_r=arcScreenR();
+  arc_q0=[...arcQ];
+  arcOut=Math.hypot(mx-arc_cx,my-arc_cy)>arc_r;
+  if(arcOut) arc_startAngle=Math.atan2(-(my-arc_cy),mx-arc_cx);
+  else       arc_v0=shoemake(mx,my,arc_cx,arc_cy,arc_r);
+}
+function arcMove(mx,my){
+  if(!arcOn) return;
+  const nowOut=Math.hypot(mx-arc_cx,my-arc_cy)>arc_r;
+  // Nahtloser Übergang innen↔aussen: aktuelles q als neue Basis fixieren
+  if(nowOut!==arcOut){
+    arc_q0=[...arcQ]; arcOut=nowOut;
+    if(nowOut) arc_startAngle=Math.atan2(-(my-arc_cy),mx-arc_cx);
+    else       arc_v0=shoemake(mx,my,arc_cx,arc_cy,arc_r);
+    return;
+  }
+  if(arcOut){
+    // Ausserhalb: Rotation um die Bildschirmnormale (Kamera-+Z in Welt)
+    const angle=Math.atan2(-(my-arc_cy),mx-arc_cx);
+    const delta=wrapDelta(angle-arc_startAngle);
+    const R=q2m(arc_q0);
+    const ax=[R[8],R[9],R[10]];
+    const h=delta*0.5, s=Math.sin(h);
+    const dq=[ax[0]*s,ax[1]*s,ax[2]*s,Math.cos(h)];
+    arcQ=qn(qm(dq,arc_q0));
+  } else {
+    // Innen: Shoemake-Trackball
+    const v1=shoemake(mx,my,arc_cx,arc_cy,arc_r);
+    const cr=cross(arc_v0,v1), d=dot3(arc_v0,v1);
+    const l2=cr[0]*cr[0]+cr[1]*cr[1]+cr[2]*cr[2];
+    if(l2<1e-12) return;
+    arcQ=qn(qm([cr[0],cr[1],cr[2],1+d],arc_q0));
+  }
+}
+function arcEnd(){arcOn=false;}
+
+// Pan-Zustand
+var panOn=false, pmx=0, pmy=0, pt0=[0,0,0];
+
+cv.onmousedown=e=>{
+  e.preventDefault();
+  if(e.button===1){ arcBegin(e.clientX,e.clientY); }
+  else if(e.button===0){ panOn=true; pmx=e.clientX; pmy=e.clientY; pt0=[...target]; }
+};
+window.onmousemove=e=>{
+  if(arcOn) arcMove(e.clientX,e.clientY);
+  if(panOn){
+    const s=oSize*2/cv.clientHeight;
+    const rm=q2m(arcQ);
+    const dx=(e.clientX-pmx)*s, dy=(e.clientY-pmy)*s;
+    target=[pt0[0]-rm[0]*dx+rm[4]*dy, pt0[1]-rm[1]*dx+rm[5]*dy, pt0[2]-rm[2]*dx+rm[6]*dy];
+  }
+};
+window.onmouseup=e=>{
+  if(e===undefined||e.button===1) arcEnd();
+  if(e===undefined||e.button===0) panOn=false;
+};
 cv.oncontextmenu=e=>e.preventDefault();
 cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0.001,Math.min(100,oSize));};
 document.getElementById('cutR').oninput=e=>{clipT=+e.target.value;document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';lastCA=-1;};
 document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));b.classList.add('on');clipAxis=+b.dataset.a;lastCA=-1;});
+document.getElementById('sphR').oninput=e=>{
+  _sphereScale=+e.target.value;
+  document.getElementById('sphV').textContent=(+e.target.value).toFixed(2);
+};
+
+// Test-Hook: Zustand lesen (nur für Playwright-Tests verwendet)
+window.__state=()=>({arcQ:[...arcQ],target:[...target],oSize,sphereScale:_sphereScale,arcOn,arcOut});
 
 /* ═══ GLB-Loader (Binary glTF 2.0) – mit voller Node-Hierarchie für Baugruppen ═══ */
 function parseGLB(buf){
@@ -973,7 +1052,7 @@ function render(){
   {
     const r=q2m(arcQ);
     // Weltmatrix der Kugel: Skalierung * Rotation (arcQ) * Translation (target)
-    const s=oSize*sphereScale;
+    const s=oSize*_sphereScale;
     const sw=new Float32Array(16);
     sw[0]=r[0]*s;sw[1]=r[1]*s;sw[2]=r[2]*s;sw[3]=0;
     sw[4]=r[4]*s;sw[5]=r[5]*s;sw[6]=r[6]*s;sw[7]=0;
