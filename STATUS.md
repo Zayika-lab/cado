@@ -1,6 +1,6 @@
 # Cado — Statuslog
 
-> 🔔 **AWAITING YOU** — #6 v2 часткою (axis creation через cylinder-fit + PCA fallback), align-рядок прибрано з Teile-панелі, 24/24 тестів ✅. Правий клік на грані → "Achse erstellen (Zylinder / PCA)".
+> 🔔 **AWAITING YOU** — Schnitt on/off-toggle + axis-mode (hover на циліндр → підсвіт → клік створює вісь). 27/27 тестів ✅. **Hard-reload** (Ctrl+Shift+R) щоб побачити новий UI.
 
 Живий список з "Geplante Änderungen" + нотатки аналізу/тестів/виконання.
 
