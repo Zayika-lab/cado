@@ -133,6 +133,18 @@ canvas{display:block;width:100%;height:100%}
 #fpPartsEmpty{padding:20px 14px;font:12px system-ui;color:#5a5a7a;
   text-align:center;font-style:italic}
 
+/* Ausrichten-Buttons unter der Teile-Liste */
+#fpAlign{padding:10px 14px;border-top:1px solid rgba(74,142,255,0.15);
+  background:rgba(74,142,255,0.05);display:none}
+#fpAlign.show{display:block}
+.fpAlignRow{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.fpAlignLb{font:10px system-ui;text-transform:uppercase;letter-spacing:1px;
+  color:#7a8194;min-width:70px}
+.alignBtn{padding:4px 10px;font:11px monospace;border:1px solid rgba(74,142,255,0.3);
+  border-radius:4px;background:transparent;color:#4a8eff;cursor:pointer;
+  transition:background 0.12s}
+.alignBtn:hover{background:rgba(74,142,255,0.15)}
+
 /* Info-Popup (Rechtsklick auf Modell → Teil/Material-Eigenschaften) */
 #glbPop{position:fixed;z-index:30;display:none;min-width:220px;max-width:320px;
   background:rgba(20,22,28,0.96);border:1px solid rgba(74,142,255,0.35);
@@ -190,6 +202,14 @@ canvas{display:block;width:100%;height:100%}
   <div id="fpPartsTab" class="fpTabPane">
     <div id="fpPartsHead">Teile des Modells</div>
     <div id="fpPartsList"></div>
+    <!-- Ausrichten-Aktionen (erscheinen, wenn ein Teil ausgewählt ist) -->
+    <div id="fpAlign">
+      <div class="fpAlignRow"><span class="fpAlignLb">Achse →</span>
+        <button class="alignBtn" data-ax="0">X</button>
+        <button class="alignBtn" data-ax="1">Y</button>
+        <button class="alignBtn" data-ax="2">Z</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -209,9 +229,9 @@ canvas{display:block;width:100%;height:100%}
   <div class="sr"><span class="lb">Schnitt</span>
     <input type="range" id="cutR" min="0" max="1" step="0.002" value="0.5">
     <span class="vl" id="cutV">50%</span>
-    <button class="ab" data-a="0">X</button>
-    <button class="ab" data-a="1">Y</button>
-    <button class="ab on" data-a="2">Z</button>
+    <button class="ab" data-a="0" title="Schnittebene senkrecht zur X-Achse">YZ</button>
+    <button class="ab" data-a="1" title="Schnittebene senkrecht zur Y-Achse">XZ</button>
+    <button class="ab on" data-a="2" title="Schnittebene senkrecht zur Z-Achse">XY</button>
   </div>
   <div class="sr"><span class="lb">Kugel</span>
     <input type="range" id="sphR" min="0.1" max="1.5" step="0.02" value="0.54">
@@ -901,6 +921,7 @@ function renderPartsList(){
   list.innerHTML='';
   if(!glbInfo || !glbInfo.parts || glbInfo.parts.length===0){
     list.innerHTML='<div id="fpPartsEmpty">Kein Modell geladen.</div>';
+    document.getElementById('fpAlign').classList.remove('show');
     return;
   }
   glbInfo.parts.forEach((p,idx)=>{
@@ -921,7 +942,76 @@ function renderPartsList(){
     });
     list.appendChild(it);
   });
+  document.getElementById('fpAlign').classList.toggle('show', selectedPartIdx>=0);
 }
+
+// PCA-Hauptrichtung der Eckpunkte eines Teils — Power-Iteration über 3x3-Kovarianz.
+function principalDirection(part){
+  if(!part || part.triCount===0) return [0,1,0];
+  const verts=new Set();
+  for(let t=0;t<part.triCount;t++){
+    const i=(part.triStart+t)*3;
+    verts.add(MI[i]); verts.add(MI[i+1]); verts.add(MI[i+2]);
+  }
+  if(verts.size<2) return [0,1,0];
+  // Schwerpunkt
+  let cx=0,cy=0,cz=0,n=0;
+  for(const vi of verts){ cx+=MV[vi*3]; cy+=MV[vi*3+1]; cz+=MV[vi*3+2]; n++; }
+  cx/=n; cy/=n; cz/=n;
+  // Kovarianz
+  let Cxx=0,Cyy=0,Czz=0,Cxy=0,Cxz=0,Cyz=0;
+  for(const vi of verts){
+    const x=MV[vi*3]-cx, y=MV[vi*3+1]-cy, z=MV[vi*3+2]-cz;
+    Cxx+=x*x; Cyy+=y*y; Czz+=z*z; Cxy+=x*y; Cxz+=x*z; Cyz+=y*z;
+  }
+  // Power-Iteration: v = C*v / |C*v|
+  let vx=1,vy=1,vz=1;
+  for(let k=0;k<30;k++){
+    const nx=Cxx*vx+Cxy*vy+Cxz*vz;
+    const ny=Cxy*vx+Cyy*vy+Cyz*vz;
+    const nz=Cxz*vx+Cyz*vy+Czz*vz;
+    const l=Math.sqrt(nx*nx+ny*ny+nz*nz);
+    if(l<1e-12) return [0,1,0];
+    vx=nx/l; vy=ny/l; vz=nz/l;
+  }
+  return [vx,vy,vz];
+}
+
+// Modell so drehen, dass die Hauptrichtung des ausgewählten Teils im View mit
+// Bildschirm-X / -Y / -Z zusammenfällt (aka col_i von rot(arcQ) = D_world).
+function alignPartTo(axisIdx){
+  if(selectedPartIdx<0 || !glbInfo) return;
+  const p=glbInfo.parts[selectedPartIdx];
+  if(!p||p.triCount===0) return;
+  const D=principalDirection(p);
+  const rot=q2m(arcQ);
+  // cs_D = rot^T * D
+  const cs=[
+    rot[0]*D[0]+rot[1]*D[1]+rot[2]*D[2],
+    rot[4]*D[0]+rot[5]*D[1]+rot[6]*D[2],
+    rot[8]*D[0]+rot[9]*D[1]+rot[10]*D[2]
+  ];
+  // r_local dreht e_i auf cs_D: r = [cross(e_i, cs_D), 1 + dot(e_i, cs_D)]
+  const ei=[0,0,0]; ei[axisIdx]=1;
+  const rv=[ei[1]*cs[2]-ei[2]*cs[1], ei[2]*cs[0]-ei[0]*cs[2], ei[0]*cs[1]-ei[1]*cs[0]];
+  const rw=1+(ei[0]*cs[0]+ei[1]*cs[1]+ei[2]*cs[2]);
+  let newQ=[...arcQ];
+  if(Math.abs(rw)>1e-6 || rv[0]*rv[0]+rv[1]*rv[1]+rv[2]*rv[2]>1e-12){
+    const rq=qn([rv[0],rv[1],rv[2],rw]);
+    newQ=qn(qm([...arcQ],rq));
+  }
+  // Ist D antiparallel zu cs_D (rw≈0), nehmen wir eine 180°-Drehung um e_ortho.
+  if(Math.abs(rw)<1e-6 && rv[0]*rv[0]+rv[1]*rv[1]+rv[2]*rv[2]<1e-12){
+    const ortho=axisIdx===0?[0,1,0]:(axisIdx===1?[1,0,0]:[1,0,0]);
+    newQ=qn(qm([...arcQ],[ortho[0],ortho[1],ortho[2],0]));
+  }
+  startNavAnim(null,newQ);
+}
+document.querySelectorAll('.alignBtn').forEach(b=>{
+  b.addEventListener('click',()=>alignPartTo(+b.dataset.ax));
+});
+window.__alignPartTo=alignPartTo;
+window.__principalDirection=principalDirection;
 
 // Welches Part enthält ein bestimmtes Dreieck? Lineare Suche, i.d.R. wenige Teile.
 function partFromTri(triIdx){
