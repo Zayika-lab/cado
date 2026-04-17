@@ -105,6 +105,20 @@ canvas{display:block;width:100%;height:100%}
 /* Load-File-Knopf unter dem Panel-Toggle, damit er sich nicht überlagert */
 #loadBtn{transition:left 0.22s ease}
 #filesPanel.open ~ #loadBtn{left:270px!important}
+
+/* Info-Popup (Rechtsklick auf Modell → Teil/Material-Eigenschaften) */
+#glbPop{position:fixed;z-index:30;display:none;min-width:220px;max-width:320px;
+  background:rgba(20,22,28,0.96);border:1px solid rgba(74,142,255,0.35);
+  border-radius:8px;padding:10px 12px;font:11px/1.5 system-ui;color:#c8ccd4;
+  backdrop-filter:blur(10px);box-shadow:0 6px 22px rgba(0,0,0,0.5)}
+#glbPop h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:#7a8194;margin-bottom:6px;font-weight:600}
+#glbPop .row{display:flex;justify-content:space-between;gap:10px;margin:2px 0}
+#glbPop .row .k{color:#7a8194}
+#glbPop .row .v{color:#c8ccd4;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+#glbPop .sw{display:inline-block;width:12px;height:12px;border-radius:3px;
+  border:1px solid rgba(255,255,255,0.2);vertical-align:middle;margin-right:4px}
+#glbPop hr{border:none;border-top:1px solid rgba(74,142,255,0.15);margin:8px 0}
 </style></head><body>
 
 <!-- Anmeldebildschirm (zuerst sichtbar) -->
@@ -141,6 +155,7 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <canvas id="c"></canvas>
+<div id="glbPop"></div>
 <div id="drop" onclick="document.getElementById('fi').click()">
   <div style="font-size:28px;margin-bottom:8px;opacity:0.5">&#128193;</div>
   Nur GLB-Dateien<br>hier ablegen oder klicken<br>
@@ -575,6 +590,7 @@ precision highp float;uniform vec4 uSC;out vec4 f;void main(){f=uSC;}`);
 
 /* ═══ Mesh-Zustand ═══ */
 var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
+var glbInfo=null; // { fileName, sizeBytes, vertCount, triCount, parts[], materials[], asset }
 
 function uploadMesh(positions,normals,indices){
   MV=positions;MN=normals;MI=indices;
@@ -828,6 +844,73 @@ function intersectTri(o,d,v0,v1,v2){
   if(t<0) return null;
   return {t,u,v,point:[o[0]+d[0]*t,o[1]+d[1]*t,o[2]+d[2]*t],e1,e2};
 }
+// Welches Part enthält ein bestimmtes Dreieck? Lineare Suche, i.d.R. wenige Teile.
+function partFromTri(triIdx){
+  if(!glbInfo||!glbInfo.parts) return null;
+  for(const p of glbInfo.parts){
+    if(triIdx>=p.triStart && triIdx<p.triStart+p.triCount) return p;
+  }
+  return null;
+}
+// sRGB-Hex aus linearem baseColorFactor (glTF liefert lineare Farben)
+function colorToHex(rgba){
+  const toSrgb=v=>{
+    const c=Math.max(0,Math.min(1,v));
+    return c<=0.0031308 ? c*12.92 : 1.055*Math.pow(c,1/2.4)-0.055;
+  };
+  const h=v=>Math.round(toSrgb(v)*255).toString(16).padStart(2,'0');
+  return '#'+h(rgba[0])+h(rgba[1])+h(rgba[2]);
+}
+function fmtBytes(b){
+  if(b<1024) return b+' B';
+  if(b<1024*1024) return (b/1024).toFixed(1)+' KB';
+  return (b/1024/1024).toFixed(2)+' MB';
+}
+function showGlbPopup(mx,my){
+  if(!meshLoaded||!glbInfo){ hideGlbPopup(); return; }
+  const pop=document.getElementById('glbPop');
+  const hit=pickModel(mx,my);
+  const part=hit ? partFromTri(hit.triIdx) : null;
+  const mat=part && part.materialIdx>=0 ? glbInfo.materials[part.materialIdx] : null;
+  const rows=[];
+  if(part){
+    rows.push('<h4>Teil</h4>');
+    rows.push(`<div class="row"><span class="k">Name</span><span class="v" title="${part.name}">${part.name}</span></div>`);
+    rows.push(`<div class="row"><span class="k">Dreiecke</span><span class="v">${part.triCount}</span></div>`);
+    if(mat){
+      const hex=colorToHex(mat.baseColor);
+      rows.push(`<div class="row"><span class="k">Material</span><span class="v" title="${mat.name}">${mat.name}</span></div>`);
+      rows.push(`<div class="row"><span class="k">Farbe</span><span class="v"><span class="sw" style="background:${hex}"></span>${hex}</span></div>`);
+      rows.push(`<div class="row"><span class="k">Metallic</span><span class="v">${mat.metallic.toFixed(2)}</span></div>`);
+      rows.push(`<div class="row"><span class="k">Roughness</span><span class="v">${mat.roughness.toFixed(2)}</span></div>`);
+    }
+    rows.push('<hr>');
+  }
+  rows.push('<h4>GLB-Datei</h4>');
+  rows.push(`<div class="row"><span class="k">Datei</span><span class="v" title="${glbInfo.fileName}">${glbInfo.fileName}</span></div>`);
+  rows.push(`<div class="row"><span class="k">Grösse</span><span class="v">${fmtBytes(glbInfo.sizeBytes)}</span></div>`);
+  rows.push(`<div class="row"><span class="k">Vertices</span><span class="v">${glbInfo.vertCount}</span></div>`);
+  rows.push(`<div class="row"><span class="k">Dreiecke</span><span class="v">${glbInfo.triCount}</span></div>`);
+  rows.push(`<div class="row"><span class="k">Teile</span><span class="v">${glbInfo.parts.length}</span></div>`);
+  rows.push(`<div class="row"><span class="k">Materialien</span><span class="v">${glbInfo.materials.length}</span></div>`);
+  if(glbInfo.asset.generator) rows.push(`<div class="row"><span class="k">Generator</span><span class="v" title="${glbInfo.asset.generator}">${glbInfo.asset.generator}</span></div>`);
+  pop.innerHTML=rows.join('');
+  pop.style.display='block';
+  // Position clamp'en, damit das Popup nicht vom Rand verdeckt wird
+  const w=pop.offsetWidth, h=pop.offsetHeight;
+  const x=Math.min(mx+12, window.innerWidth-w-8);
+  const y=Math.min(my+12, window.innerHeight-h-8);
+  pop.style.left=x+'px';
+  pop.style.top=y+'px';
+}
+function hideGlbPopup(){ document.getElementById('glbPop').style.display='none'; }
+// Klick ausserhalb bzw. ESC schliesst das Popup
+document.addEventListener('click',e=>{
+  const pop=document.getElementById('glbPop');
+  if(pop.style.display==='block' && !pop.contains(e.target)) hideGlbPopup();
+});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') hideGlbPopup(); });
+
 function pickModel(mx,my){
   const ray=rayFromScreen(mx,my);
   if(!ray) return null;
@@ -962,7 +1045,11 @@ window.onmouseup=e=>{
   }
   if(!e||e.button===0) panOn=false;
 };
-cv.oncontextmenu=e=>e.preventDefault();
+// Rechtsklick → Teil identifizieren und Info-Popup anzeigen
+cv.oncontextmenu=e=>{
+  e.preventDefault();
+  showGlbPopup(e.clientX,e.clientY);
+};
 cv.onwheel=e=>{e.preventDefault();oSize*=e.deltaY>0?1.08:1/1.08;oSize=Math.max(0.001,Math.min(100,oSize));};
 document.getElementById('cutR').oninput=e=>{clipT=+e.target.value;document.getElementById('cutV').textContent=Math.round(clipT*100)+'%';lastCA=-1;};
 document.querySelectorAll('.ab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.ab').forEach(x=>x.classList.remove('on'));b.classList.add('on');clipAxis=+b.dataset.a;lastCA=-1;});
@@ -1038,9 +1125,22 @@ function parseGLB(buf){
 
   const allP=[],allN=[],allI=[];
   let voff=0;
+  let triOff=0;
+  // Materialliste mit Basisfarbe / Metallic / Roughness
+  const materials=(json.materials||[]).map((m,i)=>{
+    const p=m.pbrMetallicRoughness||{};
+    return {
+      name: m.name || ('material'+i),
+      baseColor: p.baseColorFactor ? p.baseColorFactor.slice(0,4) : [0.8,0.8,0.8,1],
+      metallic: p.metallicFactor!==undefined ? p.metallicFactor : 1,
+      roughness: p.roughnessFactor!==undefined ? p.roughnessFactor : 1
+    };
+  });
+  // Teile: jedes Prim wird zu einem Eintrag mit Dreiecks-Bereich [triStart..triStart+triCount)
+  const parts=[];
 
   // Mesh mit Weltmatrix verarbeiten (Position + Normale transformieren)
-  function processMesh(meshIdx,W){
+  function processMesh(meshIdx,W,pathName){
     const mesh=json.meshes[meshIdx];
     for(const prim of mesh.primitives){
       const posAcc=prim.attributes.POSITION;
@@ -1052,13 +1152,11 @@ function parseGLB(buf){
       const sn=new Float32Array(nv*3);
       for(let i=0;i<nv;i++){
         const x=pos[i*3], y=pos[i*3+1], z=pos[i*3+2];
-        // Position durch Weltmatrix transformieren (inkl. Translation)
         sp[i*3]  =W[0]*x+W[4]*y+W[8]*z +W[12];
         sp[i*3+1]=W[1]*x+W[5]*y+W[9]*z +W[13];
         sp[i*3+2]=W[2]*x+W[6]*y+W[10]*z+W[14];
         if(nor){
           const nx=nor[i*3], ny=nor[i*3+1], nz=nor[i*3+2];
-          // Normale nur durch 3x3-Teil transformieren (keine Translation)
           sn[i*3]  =W[0]*nx+W[4]*ny+W[8]*nz;
           sn[i*3+1]=W[1]*nx+W[5]*ny+W[9]*nz;
           sn[i*3+2]=W[2]*nx+W[6]*ny+W[10]*nz;
@@ -1066,22 +1164,33 @@ function parseGLB(buf){
       }
       allP.push(sp);
       allN.push(sn);
+      let triCount=0;
       if(prim.indices!==undefined){
         const idx=readAcc(prim.indices);
         const si=new Uint32Array(idx.length);
         for(let i=0;i<idx.length;i++)si[i]=idx[i]+voff;
         allI.push(si);
+        triCount=si.length/3;
       }
+      parts.push({
+        name: pathName || mesh.name || ('part'+parts.length),
+        meshName: mesh.name || null,
+        triStart: triOff, triCount,
+        materialIdx: prim.material!==undefined ? prim.material : -1
+      });
+      triOff+=triCount;
       voff+=nv;
     }
   }
 
   // Rekursiv durch Szenenbaum laufen und Weltmatrizen akkumulieren
-  function walkNode(nodeIdx,parentMat){
+  function walkNode(nodeIdx,parentMat,pathName){
     const n=json.nodes[nodeIdx];
     const W=mMul(parentMat,nodeLocalMat(n));
-    if(n.mesh!==undefined)processMesh(n.mesh,W);
-    if(n.children)for(const c of n.children)walkNode(c,W);
+    const nodeName=n.name || ('node'+nodeIdx);
+    const pn=pathName ? pathName+'/'+nodeName : nodeName;
+    if(n.mesh!==undefined)processMesh(n.mesh,W,pn);
+    if(n.children)for(const c of n.children)walkNode(c,W,pn);
   }
 
   // Wurzelknoten aus der aktiven Szene
@@ -1107,7 +1216,7 @@ function parseGLB(buf){
     }
   }
   for(let i=0;i<N.length;i+=3){const l=Math.sqrt(N[i]**2+N[i+1]**2+N[i+2]**2);if(l>0){N[i]/=l;N[i+1]/=l;N[i+2]/=l;}}
-  return{positions:P,normals:N,indices:I};
+  return{positions:P,normals:N,indices:I,parts,materials,assetInfo:json.asset||{}};
 }
 function concat32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Float32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
 function concatU32(arrs){let t=0;for(const a of arrs)t+=a.length;const r=new Uint32Array(t);let o=0;for(const a of arrs){r.set(a,o);o+=a.length;}return r;}
@@ -1136,6 +1245,9 @@ async function loadFile(file){
     const m=parseGLB(buf);
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
+    // GLB-Metadaten für Rechtsklick-Info-Popup speichern
+    glbInfo={fileName:file.name, sizeBytes:file.size, vertCount:nv, triCount:nt,
+             parts:m.parts, materials:m.materials, asset:m.assetInfo};
     info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
     // Datei + Metadaten in Firebase Storage/Firestore speichern
     if(window.__saveGLB){
@@ -1154,6 +1266,8 @@ window.__loadGLBBuffer=function(name,buf){
     const m=parseGLB(buf);
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
+    glbInfo={fileName:name, sizeBytes:buf.byteLength||0, vertCount:nv, triCount:nt,
+             parts:m.parts, materials:m.materials, asset:m.assetInfo};
     info.textContent=name+': '+nv+' verts, '+nt+' tris (wiederhergestellt)';
   }catch(e){
     info.textContent='Wiederherstellung fehlgeschlagen: '+e.message;
