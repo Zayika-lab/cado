@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// Sicherheitsregeln für Firebase Storage – Projekt cado-aae0e
+// In der Firebase-Console einfügen: Storage → Rules → Inhalt ersetzen → Veröffentlichen
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // GLB-Dateien: jeder Nutzer hat seinen eigenen Ordner glb/{uid}/...
+    match /glb/{uid}/{fileName} {
+      // Nur der Eigentümer darf lesen
+      allow read:   if request.auth != null && request.auth.uid == uid;
+      // Nur der Eigentümer darf schreiben; maximal 50 MB; nur GLB-Inhaltstyp
+      allow write:  if request.auth != null
+                    && request.auth.uid == uid
+                    && request.resource.size < 50 * 1024 * 1024
+                    && (request.resource.contentType == 'model/gltf-binary'
+                        || request.resource.contentType == 'application/octet-stream');
+    }
+
+    // Standard: alles andere verweigern
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

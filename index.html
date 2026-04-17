@@ -91,8 +91,10 @@ canvas{display:block;width:100%;height:100%}
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
   import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-  import { getFirestore, collection, addDoc, serverTimestamp }
+  import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs }
     from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+  import { getStorage, ref as sRef, uploadBytes, getDownloadURL }
+    from "https://www.gstatic.com/firebasejs/10.13.2/firebase-storage.js";
 
   // Firebase-Konfiguration für das Projekt cado-aae0e
   const firebaseConfig = {
@@ -104,10 +106,11 @@ canvas{display:block;width:100%;height:100%}
     appId: "1:797607834316:web:2096afd1a01b83aa244869"
   };
 
-  // App-, Auth- und Firestore-Instanzen erzeugen
+  // App-, Auth-, Firestore- und Storage-Instanzen erzeugen
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
+  const storage = getStorage(app);
   const provider = new GoogleAuthProvider();
 
   // DOM-Referenzen für die Anmelde-UI
@@ -139,7 +142,7 @@ canvas{display:block;width:100%;height:100%}
   let currentUser = null;
 
   // Reagiert auf Änderungen des Anmeldezustands
-  onAuthStateChanged(auth, (user) => {
+  onAuthStateChanged(auth, async (user) => {
     currentUser = user;
     if (user) {
       // Angemeldet: Anmeldung ausblenden, Benutzerleiste zeigen
@@ -148,6 +151,8 @@ canvas{display:block;width:100%;height:100%}
       uAva.src = user.photoURL || '';
       uName.textContent = user.displayName || user.email || 'Benutzer';
       gbtn.disabled = false;
+      // Zuletzt hochgeladenes GLB aus Storage wiederherstellen
+      await loadLatestGLB();
     } else {
       // Abgemeldet: Anmeldebildschirm wieder anzeigen, UI zurücksetzen
       authEl.classList.remove('hide');
@@ -162,25 +167,52 @@ canvas{display:block;width:100%;height:100%}
     }
   });
 
-  // Globale Hilfsfunktion: speichert GLB-Metadaten nach erfolgreichem Laden in Firestore
-  window.__logGLB = async (filename, vertCount, triCount, sizeBytes) => {
+  // Speichert GLB-Binärdaten in Storage und Metadaten in Firestore
+  window.__saveGLB = async (file, vertCount, triCount) => {
     if (!currentUser) return;
     try {
+      // Eindeutiger Pfad je Benutzer und Zeitstempel
+      const path = `glb/${currentUser.uid}/${Date.now()}_${file.name}`;
+      const ref = sRef(storage, path);
+      await uploadBytes(ref, file, { contentType: 'model/gltf-binary' });
       await addDoc(collection(db, 'glb_loads'), {
         uid: currentUser.uid,
         email: currentUser.email || null,
         displayName: currentUser.displayName || null,
-        filename,
+        filename: file.name,
         vertCount,
         triCount,
-        sizeBytes,
+        sizeBytes: file.size,
+        storagePath: path,
         createdAt: serverTimestamp()
       });
     } catch (e) {
-      // Fehler nur in Konsole – kein harter Fehler für den Nutzer
-      console.warn('Firestore-Log fehlgeschlagen:', e);
+      console.warn('Speichern fehlgeschlagen:', e);
     }
   };
+
+  // Lädt das zuletzt hochgeladene GLB (nach Anmeldung)
+  async function loadLatestGLB() {
+    try {
+      // Nur eigene Einträge abfragen; Sortierung clientseitig → keine Composite-Index nötig
+      const q = query(collection(db, 'glb_loads'), where('uid', '==', currentUser.uid));
+      const snap = await getDocs(q);
+      if (snap.empty) return;
+      let latest = null;
+      snap.forEach(d => {
+        const data = d.data();
+        const ts = data.createdAt && data.createdAt.seconds ? data.createdAt.seconds : 0;
+        if (!latest || ts > latest.ts) latest = { ts, data };
+      });
+      if (!latest || !latest.data.storagePath) return;
+      const url = await getDownloadURL(sRef(storage, latest.data.storagePath));
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      if (window.__loadGLBBuffer) window.__loadGLBBuffer(latest.data.filename, buf);
+    } catch (e) {
+      console.warn('Wiederherstellen fehlgeschlagen:', e);
+    }
+  }
 
   // Getter für den Anmeldezustand (vom Viewer genutzt, um Uploads zu gaten)
   window.__isAuthed = () => !!currentUser;
@@ -457,10 +489,27 @@ async function loadFile(file){
     uploadMesh(m.positions,m.normals,m.indices);
     const nv=m.positions.length/3, nt=m.indices.length/3;
     info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
-    // Metadaten in Firestore protokollieren
-    if(window.__logGLB)window.__logGLB(file.name,nv,nt,file.size);
+    // Datei + Metadaten in Firebase Storage/Firestore speichern
+    if(window.__saveGLB){
+      info.textContent=file.name+' wird hochgeladen...';
+      await window.__saveGLB(file,nv,nt);
+      info.textContent=file.name+': '+nv+' verts, '+nt+' tris (gespeichert)';
+    }
   }catch(e){info.textContent='Fehler: '+e.message;console.error(e);}
 }
+
+// Lädt ein GLB aus einem ArrayBuffer (für Wiederherstellung nach Anmeldung)
+window.__loadGLBBuffer=function(name,buf){
+  try{
+    const m=parseGLB(buf);
+    uploadMesh(m.positions,m.normals,m.indices);
+    const nv=m.positions.length/3, nt=m.indices.length/3;
+    info.textContent=name+': '+nv+' verts, '+nt+' tris (wiederhergestellt)';
+  }catch(e){
+    info.textContent='Wiederherstellung fehlgeschlagen: '+e.message;
+    console.error(e);
+  }
+};
 
 /* ═══ Render-Loop (4 Passes: Stencil, Modell, Cap, Kontur) ═══ */
 function render(){
