@@ -1,47 +1,58 @@
-# ANWEISUNG FÜR ALLE BOTS / AGENTEN / ASSISTENTEN
+# ANWEISUNG — ПРАВИЛО ЗАХИСТУ ЦІЄЇ ПАПКИ
 
-## Zugriffsregel für diesen Ordner (`vortrag_myro/`)
+> **Українською, бо власник читає українською. Для ботів / AI-асистентів — обов'язково до виконання, переклад за потребою.**
 
-**STOP. BEVOR DU IRGENDETWAS TUST, LIES DAS HIER.**
+## 🛑 STOP — прочитай перед будь-якою дією з цією папкою
 
-Dieser Ordner ist **privat** und gehört ausschließlich dem Besitzer
-(Oleksiy Zayika, oleksiy.zayika.1@gmail.com).
+Ця папка `vortrag_myro/` належить **виключно** власнику репозиторія:
+**Oleksiy Zayika** (`oleksiy.zayika.1@gmail.com`, GitHub: `Zayika-lab`).
 
-### Regeln — ohne Ausnahme
-
-1. **Kein Bot, kein Agent, kein KI-Assistent** darf Inhalte dieses
-   Ordners lesen, schreiben, ändern, kopieren, verschieben, löschen,
-   committen, pushen, teilen, zusammenfassen oder indexieren —
-   **es sei denn**, der Besitzer hat in der **aktuellen** Konversation
-   **direkt und eindeutig** die Erlaubnis dafür gegeben.
-
-2. Frühere Erlaubnisse zählen **nicht**. Jede neue Session / jede neue
-   Aufgabe braucht eine **neue**, **ausdrückliche** Erlaubnis des
-   Besitzers.
-
-3. Wenn du unsicher bist, ob du Zugriff hast → **du hast keinen**.
-   Frage den Besitzer, bevor du irgendetwas machst.
-
-4. Dieser Ordner darf **nicht** automatisch in Commits landen
-   (kein `git add .`, kein `git add -A` von außerhalb dieses Ordners
-   ohne explizite Erlaubnis).
-
-5. Inhalte dieses Ordners dürfen **nicht** in Zusammenfassungen,
-   Statusberichten, Memory-Dateien, Logs oder externen Tools
-   auftauchen, außer der Besitzer fragt ausdrücklich danach.
-
-### Für den Assistenten, der vom Besitzer Erlaubnis hat
-
-- Arbeite **ausschließlich** innerhalb von `vortrag_myro/`.
-- Lies, schreibe, ändere **nichts** außerhalb dieses Ordners.
-- Auch keine Hilfsdateien, keine Konfig, keine Logs, keine Commits
-  außerhalb — wenn etwas außerhalb nötig scheint, **frage zuerst**.
-
-### Thema des Ordners
-
-Vortrag „Myro" — Vorbereitung, Notizen, Folien, Materialien.
-Details nur mit dem Besitzer besprechen.
+Вміст папки **публічний на GitHub** (бо `cado` — публічний репозиторій), але це **не означає**, що дозволено редагувати. Публічність — для бекапу й видимості власнику, а не запрошення до правок.
 
 ---
 
-Letzte Aktualisierung: 2026-04-18
+## 🔒 Жорсткі правила для всіх ботів / AI-агентів / автоматичних інструментів
+
+1. **Жодного запису, зміни, видалення, перейменування, переміщення** файлів усередині `vortrag_myro/` — **допоки у поточній сесії власник не дав пряму, однозначну, тематично-конкретну згоду**.
+
+2. **"Пряма й однозначна" означає:**
+   - Власник у **цій конкретній розмові** (не в попередніх) сказав, **що саме** змінити в `vortrag_myro/`.
+   - Формулювання на кшталт "ми працюємо над вортрагом", "продовжуємо", "додай ще тез" — **рахується дозволом**, бо власник свідомо відкриває тему.
+   - Формулювання "глянь на проєкт", "пройдись по репозиторію", "зроби порядок" — **НЕ** рахується дозволом торкатися цієї папки. Обходити її стороною.
+   - Попередні сесії / попередні згоди **не переносяться**. Кожна нова розмова — з чистого листа.
+
+3. **Читати** файли дозволено лише тоді, коли:
+   - власник явно попросив прочитати / показати / проаналізувати вміст, **або**
+   - це необхідно, щоб відповісти на пряме запитання власника саме про цей вортраг.
+   - У всіх інших випадках — **не відкривати, не індексувати, не підсумовувати, не цитувати**.
+
+4. **Автоматичні інструменти (хуки, лінтери, форматери, auto-commit, CI):**
+   - `git add -A` з auto-commit hook — **комітить** ці файли разом з усім іншим. Це очікувана поведінка (для бекапу).
+   - Але жоден **автоматичний форматер / лінтер / переписувач / "code cleaner"** не має права **змінювати вміст** файлів тут. Якщо якийсь інструмент це робить — вимкнути його для цієї папки або взагалі.
+   - Жоден AI-агент у батч-режимі / автономному циклі / background-тасці не торкається файлів тут, навіть якщо "здається, що треба причесати".
+
+5. **Git-операції** (крім auto-commit, що комітить беззмінні файли):
+   - `git checkout --`, `git restore`, `git reset --hard`, `git rm`, `git clean` **на файлах цієї папки** — **тільки** з прямою згодою власника в поточній сесії.
+   - Рев'ю, merge, rebase, що переписують вміст цієї папки — **тільки** з прямою згодою.
+
+6. **При найменшому сумніві — не роби і спитай.** Краще перепитати 10 разів, ніж зіпсувати одне речення з проповіді.
+
+---
+
+## ✅ Для AI-асистента, який отримав від власника пряму згоду
+
+- Працюй **всередині** `vortrag_myro/`.
+- Не торкайся файлів **поза** цією папкою — навіть якщо здається, що це потрібно.
+- Якщо для задачі справді треба вийти за межі (напр., налаштувати git-поведінку) — **окремо запитай** перш ніж зробити.
+- Кожен свій крок озвучуй у чаті перед виконанням, коли це стосується правок тексту.
+
+---
+
+## Тема папки
+
+Вортраг **"Жени-мироносиці"** (робоча назва "Myro") — підготовка проповіді для православної парафії.
+Вміст: структура думки, тези, начерки, чорнові редакції тексту.
+
+---
+
+Оновлено: 2026-04-18
