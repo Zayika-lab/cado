@@ -1,19 +1,35 @@
 # Cado — Statuslog
 
-> 💤 **ПАУЗА** — повний список фіч із планування пройдено. 31/31 тестів ✅, все запушено в origin/main. Для відновлення роботи: перевір STATUS.md і пам'ять у `~/.claude/projects/-workspaces-cado/memory/`.
+> 💤 **ПАУЗА** — велика сесія з покращення рендер-якості та організації. 34/34 тестів ✅, все запушено в origin/main. Для відновлення: STATUS.md + пам'ять у `~/.claude/projects/-workspaces-cado/memory/`.
 
-## Останні стани (stand: пауза сеансу)
-- **Колір з GLB-матеріалу:** baseColorFactor → uniform `uC` при рендерингу кожного primitive
-- **Persistence:** axes, planes, customPlane, cut state зберігаються в Firestore-docі файлу. Debounced save (250мс) на slider.
-- **Площини з 2 осей:** `⊕ Neu` в блоці Ebenen → клік 2 осі (або 1 axis + X/Y/Z)
-- **Axis creation:** `⊕ Neu` в блоці Achsen → hover підсвічує flood-fill region, клік створює вісь (Zylinder-fit або PCA fallback, центр через algebraic circle-fit)
-- **Face-pick для cut:** `⊕ Fläche` у Schnitt-блоці; `⇒ Schnitt` кнопка на кожній створеній площині
+## Останній стан (пауза сеансу 2026-04-18)
 
-## Можливі напрямки розвитку
+**Якість рендера:**
+- Half-Lambert 3-point lighting (Key+Fill+Back), ambient 0.26 — м'які градієнти на криволінійних поверхнях
+- Feature edges (CAD-умови): boundary + crease (<18°), `pLine` з `uClip` щоб клипалися розрізом
+- Cap per-body: INVERT stencil (parity) з DISABLED depth-test, темно-сірий колір (0.36) — чисто на складних assembly
+- Ortho near/far стиснуто до `5000±3·maxDim` → depth precision ~800k/unit, усуває z-fighting
+- Матеріал-палітра за ІМЕНЕМ (`Stahl`, `Kupfer`, `Holz`...) + fallback до baseColorFactor
+
+**Організація:**
+- Teile-панель: ієрархічне дерево з glTF-нод (папки + bodies), collapse arrow, visibility checkbox (каскадно)
+- **selectedBodies** — Set; click body або папку → виділення (Ctrl+Click — additive)
+- Виділення (orange) малюється ПІСЛЯ cap → завжди поверх усього
+- Resize panel drag-handle, persist у localStorage
+
+**Інфраструктура:**
+- Per-material модель-color (Pass 2 ітерує parts)
+- `bodyVisible[]` + `partToBody[]` → скіп у render pass
+- Ring-контур сфери видно ТІЛЬКИ під час активної ротації (arcOn), незалежно від toggle сфери
+- Feature-edges і cap клипляться через custom/axis-aligned plane однаково
+
+## Наступний крок (коли скажеш)
+- **Аналіз контактних поверхонь:** детекція взаємних контактів між деталями; візуалізація у окремому вікні — мініатюри деталей з'єднані лініями за наявністю контакту (граф зв'язків)
+
+## Інші напрямки
 - Вимірювання (відстань 2 точок, кут 2 осей, точка→площина)
 - Explode view для assembly
-- Unfold/2D drawing (великий rewrite)
-- Pick ребер/вершин (не тільки поверхонь)
+- Pick ребер/вершин
 - Multi-file scene + undo/redo
 - Export сцени (axes+planes+cuts) як JSON
 
