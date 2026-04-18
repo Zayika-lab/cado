@@ -25,21 +25,20 @@ test('parts panel lists parts, click toggles highlight', async ({ page }) => {
   expect(firstName).toBe('seat');
 
   // No selection initially
-  let sel = await page.evaluate(() => window.selectedPartIdx);
-  expect(sel).toBe(-1);
+  let selCount = await page.evaluate(() => window.selectedBodies.size);
+  expect(selCount).toBe(0);
 
   // Click the backrest (index 1)
   await items.nth(1).click();
-  sel = await page.evaluate(() => window.selectedPartIdx);
-  expect(sel).toBe(1);
+  const selHas1 = await page.evaluate(() => window.selectedBodies.has(1));
+  expect(selHas1).toBe(true);
   await expect(items.nth(1)).toHaveClass(/active/);
 
-  // Screenshot to show highlight
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(SHOTS, '11_parts-panel-highlight.png') });
 
   // Click again to deselect
   await items.nth(1).click();
-  sel = await page.evaluate(() => window.selectedPartIdx);
-  expect(sel).toBe(-1);
+  selCount = await page.evaluate(() => window.selectedBodies.size);
+  expect(selCount).toBe(0);
 });

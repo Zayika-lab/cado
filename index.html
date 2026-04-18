@@ -774,7 +774,7 @@ precision highp float;uniform vec4 uSC;out vec4 f;void main(){f=uSC;}`);
 /* ═══ Mesh-Zustand ═══ */
 var MV,MN,MI,meshVao,meshIB,bMin,bMax,maxDim,meshLoaded=false;
 var glbInfo=null; // { fileName, sizeBytes, vertCount, triCount, parts[], bodies[], sceneTree[], materials[], asset }
-var selectedPartIdx=-1; // Index des hervorgehobenen Teils (-1 = keines)
+var selectedBodies=new Set(); // Menge der ausgewählten Body-Indizes
 var bodyVisible=[];     // bodyVisible[i] = true → Body wird gerendert
 var partToBody=null;    // part-Index → body-Index, für schnellen Skip im Render
 var collapsedNodes=new Set(); // Knoten-IDs mit eingeklapptem Sub-Tree
@@ -1441,6 +1441,16 @@ document.querySelectorAll('.fpTab').forEach(t=>{
   });
 })();
 
+// Alle Body-Indizes unter einem Tree-Knoten sammeln (für Ordner-Auswahl)
+function collectBodyIdxs(node){
+  const out=[];
+  (function walk(n){
+    if(n.bodyIdx>=0) out.push(n.bodyIdx);
+    for(const c of (n.children||[])) walk(c);
+  })(node);
+  return out;
+}
+
 function renderPartsList(){
   const list=document.getElementById('fpPartsList');
   list.innerHTML='';
@@ -1457,7 +1467,9 @@ function renderPartsList(){
     const bIdx = node.bodyIdx;
     const body = bIdx>=0 ? bodies[bIdx] : null;
     const visible = body ? (window.bodyVisible?window.bodyVisible[bIdx]!==false:true) : true;
-    const isSelected = body && bIdx===selectedPartIdx;
+    // Ordner = aktiv wenn ALLE Nachkommen-Bodies ausgewählt sind; Body = aktiv wenn im Set
+    const descBodies = collectBodyIdxs(node);
+    const isSelected = descBodies.length>0 && descBodies.every(i=>selectedBodies.has(i));
     const collapsed = window.collapsedNodes && window.collapsedNodes.has(node.nodeIdx);
 
     const it=document.createElement('div');
@@ -1511,12 +1523,19 @@ function renderPartsList(){
     it.appendChild(nm);
     if(tc) it.appendChild(tc);
 
-    if(body){
-      it.addEventListener('click',()=>{
-        selectedPartIdx=(selectedPartIdx===bIdx)?-1:bIdx;
-        renderPartsList();
-      });
-    }
+    // Klick wählt Body/Ordner aus (Ordner = kaskadiert über alle Nachkommen).
+    // Ctrl/Cmd + Klick togglet zusätzlich ohne die bisherige Auswahl zu löschen.
+    it.addEventListener('click',(e)=>{
+      const additive = e.ctrlKey || e.metaKey;
+      const allIn = descBodies.every(i=>selectedBodies.has(i));
+      if(!additive) selectedBodies.clear();
+      if(allIn){
+        for(const i of descBodies) selectedBodies.delete(i);
+      } else {
+        for(const i of descBodies) selectedBodies.add(i);
+      }
+      renderPartsList();
+    });
     list.appendChild(it);
 
     if(!collapsed){
@@ -1717,8 +1736,9 @@ function principalDirection(obj){
 // Modell so drehen, dass die Hauptrichtung des ausgewählten Teils im View mit
 // Bildschirm-X / -Y / -Z zusammenfällt (aka col_i von rot(arcQ) = D_world).
 function alignPartTo(axisIdx){
-  if(selectedPartIdx<0 || !glbInfo) return;
-  const b=glbInfo.bodies[selectedPartIdx];
+  if(selectedBodies.size===0 || !glbInfo) return;
+  const firstBi=selectedBodies.values().next().value;
+  const b=glbInfo.bodies[firstBi];
   if(!b||b.triCount===0) return;
   const D=principalDirection(b);
   const rot=q2m(arcQ);
@@ -1980,6 +2000,7 @@ window.createdAxes=createdAxes;
 window.rebuildAxisBuffer=rebuildAxisBuffer;
 window.rebuildPlaneBuffer=rebuildPlaneBuffer;
 window.renderPartsList=renderPartsList;
+window.selectedBodies=selectedBodies;
 // Lese-Accessoren für Cut-Zustand (vom Persistenz-Code verwendet)
 window.__getCutState=()=>({
   enabled: cutEnabled, axis: clipAxis, t: clipT,
@@ -2539,7 +2560,7 @@ async function loadFile(file){
     window.partToBody = new Int32Array(m.parts.length);
     m.bodies.forEach((b,bi)=>{ for(const pi of b.partIndices) window.partToBody[pi]=bi; });
     window.collapsedNodes = new Set();
-    selectedPartIdx=-1;
+    selectedBodies.clear();
     renderPartsList();
     info.textContent=file.name+': '+nv+' verts, '+nt+' tris';
     // Datei + Metadaten in Firebase Storage/Firestore speichern
@@ -2566,7 +2587,7 @@ window.__loadGLBBuffer=function(name,buf){
     window.partToBody = new Int32Array(m.parts.length);
     m.bodies.forEach((b,bi)=>{ for(const pi of b.partIndices) window.partToBody[pi]=bi; });
     window.collapsedNodes = new Set();
-    selectedPartIdx=-1;
+    selectedBodies.clear();
     renderPartsList();
     info.textContent=name+': '+nv+' verts, '+nt+' tris (wiederhergestellt)';
   }catch(e){
@@ -2683,30 +2704,22 @@ function render(){
     gl.depthMask(true);gl.disable(gl.BLEND);
   }
 
-  // Pass 2.5: Hervorhebung — ausgewählter Body (orange, alle Primitives) und
-  // Hover-Fläche im Axis-/FacePick-Modus (blau/grün, nur Flood-Fill-Region).
-  gl.useProgram(pSphere);
-  gl.bindVertexArray(meshVao);
-  gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
-  gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-  gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
-  if(selectedPartIdx>=0 && glbInfo && glbInfo.bodies[selectedPartIdx]){
-    const b=glbInfo.bodies[selectedPartIdx];
-    if(b.triCount>0){
-      gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[1.0,0.55,0.1,0.55]);
-      gl.drawElements(gl.TRIANGLES, b.triCount*3, gl.UNSIGNED_INT, b.triStart*3*4);
-    }
-  }
+  // Pass 2.5 (Hover): Fläche im Axis-/FacePick-Modus hervorheben.
+  // Die AUSGEWÄHLTEN Bodies werden absichtlich NACH dem Cap-Pass gezeichnet
+  // (siehe weiter unten), damit sie immer ganz oben bleiben.
   if((axisMode||facePickMode) && hoverRegionCount>0 && hoverRegionBuf){
+    gl.useProgram(pSphere);
+    gl.bindVertexArray(meshVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
     const color=axisMode?[0.3,0.8,1.0,0.6]:[0.2,1.0,0.5,0.5];
     gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),color);
-    // Temporären Index-Buffer binden (meshVao's Positionen weiterverwenden)
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, hoverRegionBuf);
     gl.drawElements(gl.TRIANGLES, hoverRegionCount, gl.UNSIGNED_INT, 0);
-    // Originalen Index-Buffer wiederherstellen für nachfolgende Passes
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, meshIB);
+    gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
   }
-  gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
 
   // Pass 3: Cap pro Body. Jeder Body (glTF-Knoten) ist ein eigener geschlossener
   // Körper — sein Cross-Section wird separat via Stencil-INVERT ermittelt, damit
@@ -2760,6 +2773,23 @@ function render(){
       gl.uniform4fv(gl.getUniformLocation(pLine,'uClip'),[0,0,0,1]);
       gl.depthFunc(gl.ALWAYS);gl.drawArrays(gl.LINES,0,cCount);gl.depthFunc(gl.LEQUAL);
     }
+  }
+
+  // Pass 3.5: Hervorhebung der ausgewählten Bodies — NACH dem Cap, damit die
+  // Markierung selbst durch Schnittflächen und andere Teile hindurch sichtbar bleibt.
+  if(selectedBodies.size>0 && glbInfo && glbInfo.bodies.length>0){
+    gl.useProgram(pSphere);
+    gl.bindVertexArray(meshVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(pSphere,'uMVP'),false,vp);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+    gl.uniform4fv(gl.getUniformLocation(pSphere,'uSC'),[1.0,0.55,0.10,0.55]);
+    for(const bi of selectedBodies){
+      const b=glbInfo.bodies[bi];
+      if(!b||b.triCount===0) continue;
+      gl.drawElements(gl.TRIANGLES, b.triCount*3, gl.UNSIGNED_INT, b.triStart*3*4);
+    }
+    gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
   }
 
   // Pass 5: Arcball-Kugel + Ring-Kontur — im Kamera-Raum.
